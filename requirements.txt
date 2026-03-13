@@ -1,0 +1,6 @@
+requests>=2.28.0
+python-dotenv>=1.0.0
+textual>=0.50.0
+
+# GUI (opzionale - richiede anche: sudo apt install python3-tk)
+# tkinter  # Incluso in Python3, su Debian/Ubuntu installare: python3-tk

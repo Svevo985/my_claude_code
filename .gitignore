@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv
+
+# Logging
+logs/
+*.log
+
+# Sessioni
+sessions/
+*.json
+
+# Stato
+.ollama_bridge_state.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# History
+.ollama_bridge_history
