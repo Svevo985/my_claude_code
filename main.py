@@ -651,18 +651,30 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                         self._failed_commands = []
                         if self.proj and self.proj.exists():
                             self._update_claude_md_fix(u)
-                        if self.proj and self.proj.exists():
-                            py_files_before = list(self.proj.glob("*.py"))
-                            if py_files_before:
-                                status(f"File Python trovati: {len(py_files_before)}", "success")
-                                fixed_count = fix_project_files(self.proj)
-                                if fixed_count > 0:
-                                    status(f"🔧 Fixati {fixed_count} file", "success")
+                        
+                        # Per /new: chiedi se ci sono altri file da creare
+                        if self.mode == 'new' and self._plan_done and not self._done(llm):
+                            file_ctx = self._read_file_context()
+                            continue_prompt = f"""File creati finora:
+{file_ctx}
+
+Task originale: {u}
+
+Ci sono ancora file da creare per completare il progetto?
+- Se SI: genera SOLO i file mancanti (max 4-5 comandi)
+- Se NO: rispondi "Task completato"
+
+JSON:"""
+                            self.sess.add_message("user", continue_prompt)
+                            status("🔄 Verifico se ci sono altri file...", "running")
+                            continue
+                        
                         if self._done(llm):
                             status("✓ Task completato!", "success")
                             if self.ctx: self.ctx._st = "completato"
                             self._test()
                             return "OK"
+                        
                         if self.auto_c:
                             self.sess.add_message("user", "Continua con i prossimi passi se necessario, altrimenti rispondi 'Task completato'")
                             continue
