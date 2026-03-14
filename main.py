@@ -263,9 +263,9 @@ class Bridge:
             "repeat_last_n": 64,
 
             # ── Memoria GPU (RX 5700 XT 8GB) ────────────────────────────────
-            "num_ctx": 4096,
+            "num_ctx": 8192,
             "num_batch": 512,
-            "num_predict": 2048,
+            "num_predict": 8192,  # Default aumentato per permettere più file
             "num_thread": 8,
         }
 
@@ -555,6 +555,14 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                 if file_ctx:
                     self.sess.add_message("user", f"## File già esistenti (NON riscriverli):\n{file_ctx}")
             try:
+                # Aumenta token per /new (creazione progetti multi-file)
+                use_extended = self.mode == 'new' or len(self.sess.to_ollama_messages()) > 10
+                if use_extended:
+                    original_ctx = self.ollama.options.get("num_ctx", 8192)
+                    original_predict = self.ollama.options.get("num_predict", 8192)
+                    self.ollama.options["num_ctx"] = 16384
+                    self.ollama.options["num_predict"] = 16384
+                
                 status("LLM sta generando...", "running")
                 self.thinking.start()
                 request_data = {"messages": self.sess.to_ollama_messages(), "model": self.ollama.model}
@@ -562,8 +570,21 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                 for chunk in self.ollama.chat(self.sess.to_ollama_messages(), stream=True):
                     llm += chunk
                 self.thinking.stop()
+                
+                # Ripristina opzioni se estese
+                if use_extended:
+                    self.ollama.options["num_ctx"] = original_ctx
+                    self.ollama.options["num_predict"] = original_predict
+                
                 response_data = {"message": {"content": llm}}
                 log_request_response(self.sess.id, request_data, response_data)
+                
+                # Controlla se response è troncata (per /new con molti file)
+                if use_extended and len(llm) > 14000 and not llm.strip().endswith('}'):
+                    status("⚠️ Response lunga, verifico completamento...", "warning")
+                    if not llm.strip().endswith('EOF"}') and '"cmd' in llm:
+                        llm = self._continue_truncated_response(llm, u)
+                
                 current_hash = hashlib.md5(llm.encode()).hexdigest()
                 if current_hash == self._last_response_hash:
                     consecutive_duplicates += 1
@@ -731,14 +752,14 @@ Genera DOCUMENTAZIONE.md in ITALIANO, completo e dettagliato (minimo 1000 parole
 Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
         self.sess = self.sm.create_session()
         self.sess.add_message("user", prompt)
-        
+
         # Salva opzioni originali e imposta opzioni elevate per /reverse
-        original_ctx = self.ollama.options.get("num_ctx", 4096)
-        original_predict = self.ollama.options.get("num_predict", 2048)
-        self.ollama.options["num_ctx"] = 16384
-        self.ollama.options["num_predict"] = 16384
-        status("🔧 Contesto esteso: 16384 token per /reverse", "info")
-        
+        original_ctx = self.ollama.options.get("num_ctx", 8192)
+        original_predict = self.ollama.options.get("num_predict", 8192)
+        self.ollama.options["num_ctx"] = 32768
+        self.ollama.options["num_predict"] = 32768
+        status("🔧 Contesto esteso: 32768 token per /reverse", "info")
+
         try:
             self.thinking.start()
             llm = ""
@@ -746,6 +767,13 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                 llm += chunk
             self.thinking.stop()
             p = self.parser.parse(llm)
+            
+            # Se il JSON è troncato o incompleto, chiedi di continuare
+            if not p.is_valid or (len(llm) > 10000 and llm.strip()[-10:] != 'EOF"}'):
+                status("⚠️ Response troncata, chiedo continuazione...", "warning")
+                llm = self._continue_truncated_response(llm, prompt)
+                p = self.parser.parse(llm)
+            
             if p.is_valid and p.commands:
                 self._execute_commands(p.commands)
                 doc_file = target / "DOCUMENTAZIONE.md"
@@ -759,6 +787,40 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
             # Ripristina sempre le opzioni originali
             self.ollama.options["num_ctx"] = original_ctx
             self.ollama.options["num_predict"] = original_predict
+
+    def _continue_truncated_response(self, truncated_llm: str, original_prompt: str) -> str:
+        """Chiede al modello di continuare una response troncata."""
+        status("🔄 Chiedo continuazione JSON...", "running")
+        
+        # Trova l'ultimo comando completo
+        last_cmd_match = re.search(r'"cmd(\d+)":\s*"(.*?)"', truncated_llm, re.DOTALL)
+        last_cmd_num = int(last_cmd_match.group(1)) if last_cmd_match else 0
+        
+        continue_prompt = f"""Il tuo JSON precedente era troncato. Continua da cmd{last_cmd_num + 1}.
+
+JSON TRONCATO (ultimi 500 chars):
+...{truncated_llm[-500:]}
+
+CONTINUA il JSON da dove si è interrotto. Formato:
+{{"cmd{last_cmd_num + 1}": "...", "cmd{last_cmd_num + 2}": "...", ...}}
+
+Importante: chiudi il JSON con }} alla fine."""
+        
+        self.sess = self.sm.create_session()
+        self.sess.add_message("user", continue_prompt)
+        
+        try:
+            self.thinking.start()
+            continuation = ""
+            for chunk in self.ollama.chat(self.sess.to_ollama_messages(), stream=True):
+                continuation += chunk
+            self.thinking.stop()
+            
+            # Combina originale + continuazione
+            return truncated_llm + "\n" + continuation
+        except Exception as e:
+            logger.error(f"Continue error: {e}")
+            return truncated_llm
 
     def _cmd_ui(self, c) -> bool:
         p = c.lower().split(); cmd = p[0]
