@@ -15,12 +15,11 @@ class ParsedCommand:
 class CommandParser:
     # Pattern per JSON dentro code block markdown - PRIORITA' MASSIMA
     JSON_BLOCK_PATTERN = re.compile(r'```(?:json)?\s*\n?({.+?})\s*\n?```', re.DOTALL | re.IGNORECASE)
-    # Pattern per JSON comandi - cerca "cmdN": specifico
-    CMD_JSON_PATTERN = re.compile(r'^\s*(\{(?:[^{}]|"(?:[^"\\]|\\.)*")*\})\s*$', re.DOTALL)
-    # Pattern per trovare inizio comandi nel testo
+    # Pattern per trovare inizio comandi nel testo - cerca "cmdN":
     CMD_START_PATTERN = re.compile(r'\{["\s]*cmd\d+["\s]*:', re.DOTALL)
 
     def parse(self, response: str) -> ParsedCommand:
+        original_response = response
         response = response.strip()
 
         # 1. PRIORITA': cerca JSON dentro code block markdown
@@ -28,63 +27,97 @@ class CommandParser:
         if block_matches:
             return self._try_parse_json(block_matches[0], response)
 
-        # 2. Cerca pattern specifico per comandi {"cmd1": ...}
-        # Questo evita di parsare HTML/CSS che iniziano con {
+        # 2. Cerca pattern {"cmdN": nel testo - PUO' ESSERE DOVUNQUE
         cmd_match = self.CMD_START_PATTERN.search(response)
         if cmd_match:
-            # Trova la posizione di inizio del JSON
             start_pos = cmd_match.start()
-            # Estrai da quel punto in poi
             potential_json = response[start_pos:]
-            # Prova a estrarre JSON bilanciato
             json_str = self._extract_balanced_json(potential_json)
             if json_str:
-                return self._try_parse_json(json_str, response)
+                return self._try_parse_json(json_str, original_response)
+            # Se non estrae bilanciato, prova comunque a parsare
+            return self._try_parse_json(potential_json, original_response)
 
-        # 3. Ultimo tentativo: se response inizia e finisce con {} e sembra JSON
-        if response.startswith('{') and response.endswith('}'):
-            # Controlla che non sia HTML/CSS (contiene tag HTML o selector CSS)
-            if not re.search(r'<!DOCTYPE|<html|<div|<span|:\w+\s*\{|@media|@keyframes', response, re.IGNORECASE):
-                return self._try_parse_json(response, response)
+        # 3. Se la response INIZIA con { (anche senza cmd), prova a estrarre
+        if response.startswith('{'):
+            json_str = self._extract_balanced_json(response)
+            if json_str:
+                return self._try_parse_json(json_str, original_response)
+            return self._try_parse_json(response, original_response)
 
         return ParsedCommand(
             commands=[],
-            raw_response=response,
+            raw_response=original_response,
             is_valid=False,
             error="Nessun comando JSON trovato"
         )
 
     def _extract_balanced_json(self, text: str) -> str:
         """Estrae JSON bilanciato contando parentesi graffe."""
-        if not text.startswith('{'):
+        if not text or not text.startswith('{'):
             return ""
         
         depth = 0
         in_string = False
         escape_next = False
+        in_heredoc = False
+        heredoc_marker = None
         
-        for i, char in enumerate(text):
+        i = 0
+        while i < len(text):
+            char = text[i]
+            
             if escape_next:
                 escape_next = False
+                i += 1
                 continue
             
-            if char == '\\':
+            if char == '\\' and in_string:
                 escape_next = True
+                i += 1
                 continue
             
             if char == '"' and not escape_next:
+                # Controlla se siamo in un heredoc
+                if not in_string and i + 1 < len(text) and text[i:i+3] == "'EO":
+                    # Inizio heredoc: 'EOF' o simile
+                    in_heredoc = True
+                    # Trova la fine del marker
+                    end_marker = text.find("'", i + 1)
+                    if end_marker != -1:
+                        heredoc_marker = text[i:end_marker + 1]
+                        i = end_marker + 1
+                        continue
+                
+                if in_heredoc and heredoc_marker:
+                    # Cerca la fine dell'heredoc
+                    eof_pos = text.find("\nEOF", i)
+                    if eof_pos != -1:
+                        # Trova la chiusura del heredoc
+                        after_eof = text.find("'", eof_pos + 4)
+                        if after_eof != -1:
+                            i = after_eof + 1
+                            in_heredoc = False
+                            heredoc_marker = None
+                            continue
+                
                 in_string = not in_string
+                i += 1
                 continue
             
-            if not in_string:
+            if not in_string and not in_heredoc:
                 if char == '{':
                     depth += 1
                 elif char == '}':
                     depth -= 1
                     if depth == 0:
                         return text[:i+1]
+            
+            i += 1
         
-        return ""
+        # Se non trova chiusura, ritorna quello che c'è (JSON troncato)
+        # Il parser proverà a fixarlo
+        return text if text.startswith('{') else ""
 
     def _try_parse_json(self, json_str: str, raw_response: str) -> ParsedCommand:
         try:
