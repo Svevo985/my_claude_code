@@ -355,15 +355,13 @@ class Bridge:
         failures = []
         filtered_commands = []
         for cmd in commands:
+            # Blocca sempre creazione README.md - usa solo claude.md
             create_readme = re.search(r'>\s*[/\w-]*README\.md', cmd, re.IGNORECASE)
-            create_claude = re.search(r'>\s*[/\w-]*(claude\.md)', cmd, re.IGNORECASE)
-            skip = False
             if create_readme:
-                if (self.proj / "claude.md").exists() or (self.proj / "CLAUDE.md").exists():
-                    status("⚠️ Saltato: creazione README.md (usa claude.md)", "warning")
-                    skip = True
-            if not skip:
-                filtered_commands.append(cmd)
+                status("⛔ Saltato: README.md non creato (usa solo claude.md)", "warning")
+                continue
+            
+            filtered_commands.append(cmd)
         for i, cmd in enumerate(filtered_commands, 1):
             cmd_box(cmd, i)
             ok, out = self.ops.execute_command(cmd)
@@ -737,9 +735,9 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
         # Salva opzioni originali e imposta opzioni elevate per /reverse
         original_ctx = self.ollama.options.get("num_ctx", 4096)
         original_predict = self.ollama.options.get("num_predict", 2048)
-        self.ollama.options["num_ctx"] = 8192
-        self.ollama.options["num_predict"] = 8192
-        status("🔧 Contesto esteso: 8192 token per /reverse", "info")
+        self.ollama.options["num_ctx"] = 16384
+        self.ollama.options["num_predict"] = 16384
+        status("🔧 Contesto esteso: 16384 token per /reverse", "info")
         
         try:
             self.thinking.start()
