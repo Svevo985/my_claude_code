@@ -13,27 +13,39 @@ class ParsedCommand:
     error: Optional[str] = None
 
 class CommandParser:
-    # Pattern per JSON dentro code block markdown
-    JSON_BLOCK_PATTERN = re.compile(r'```(?:json)?\s*\n?({[^}]*})\s*\n?```', re.DOTALL | re.IGNORECASE)
-    # Pattern per JSON nudo
-    JSON_PATTERN = re.compile(r'\{[^{}]*\}', re.DOTALL)
+    # Pattern per JSON dentro code block markdown - PRIORITA' MASSIMA
+    JSON_BLOCK_PATTERN = re.compile(r'```(?:json)?\s*\n?({.+?})\s*\n?```', re.DOTALL | re.IGNORECASE)
+    # Pattern per JSON comandi - cerca "cmdN": specifico
+    CMD_JSON_PATTERN = re.compile(r'^\s*(\{(?:[^{}]|"(?:[^"\\]|\\.)*")*\})\s*$', re.DOTALL)
+    # Pattern per trovare inizio comandi nel testo
+    CMD_START_PATTERN = re.compile(r'\{["\s]*cmd\d+["\s]*:', re.DOTALL)
 
     def parse(self, response: str) -> ParsedCommand:
         response = response.strip()
 
-        # Prima cerca JSON dentro code block markdown
+        # 1. PRIORITA': cerca JSON dentro code block markdown
         block_matches = self.JSON_BLOCK_PATTERN.findall(response)
         if block_matches:
             return self._try_parse_json(block_matches[0], response)
 
-        # Poi cerca JSON diretto
-        if response.startswith('{') and response.endswith('}'):
-            return self._try_parse_json(response, response)
+        # 2. Cerca pattern specifico per comandi {"cmd1": ...}
+        # Questo evita di parsare HTML/CSS che iniziano con {
+        cmd_match = self.CMD_START_PATTERN.search(response)
+        if cmd_match:
+            # Trova la posizione di inizio del JSON
+            start_pos = cmd_match.start()
+            # Estrai da quel punto in poi
+            potential_json = response[start_pos:]
+            # Prova a estrarre JSON bilanciato
+            json_str = self._extract_balanced_json(potential_json)
+            if json_str:
+                return self._try_parse_json(json_str, response)
 
-        # Cerca JSON nel testo
-        matches = self.JSON_PATTERN.findall(response)
-        if matches:
-            return self._try_parse_json(matches[0], response)
+        # 3. Ultimo tentativo: se response inizia e finisce con {} e sembra JSON
+        if response.startswith('{') and response.endswith('}'):
+            # Controlla che non sia HTML/CSS (contiene tag HTML o selector CSS)
+            if not re.search(r'<!DOCTYPE|<html|<div|<span|:\w+\s*\{|@media|@keyframes', response, re.IGNORECASE):
+                return self._try_parse_json(response, response)
 
         return ParsedCommand(
             commands=[],
@@ -41,6 +53,38 @@ class CommandParser:
             is_valid=False,
             error="Nessun comando JSON trovato"
         )
+
+    def _extract_balanced_json(self, text: str) -> str:
+        """Estrae JSON bilanciato contando parentesi graffe."""
+        if not text.startswith('{'):
+            return ""
+        
+        depth = 0
+        in_string = False
+        escape_next = False
+        
+        for i, char in enumerate(text):
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if char == '\\':
+                escape_next = True
+                continue
+            
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            
+            if not in_string:
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        return text[:i+1]
+        
+        return ""
 
     def _try_parse_json(self, json_str: str, raw_response: str) -> ParsedCommand:
         try:
