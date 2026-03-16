@@ -276,7 +276,15 @@ class Bridge:
             options=ollama_options
         )
 
-        self.ops, self.parser, self.sm = FileOperations(cfg.get("working_directory",".")), CommandParser(), SessionManager()
+        allowed_dirs = cfg.get("safety", {}).get("allowed_directories")
+        self.ops = FileOperations(
+            cfg.get("working_directory", "."),
+            allowed_directories=allowed_dirs if allowed_dirs else None,
+            timeout=cfg.get("shell", {}).get("timeout", 30)
+        )
+        self.parser, self.sm = CommandParser(), SessionManager()
+        self.env_info = self.ops.environment_info()
+        self._env_prompt_added = False
         self.sess, self.models, self.thinking, self.log_f, self.logs = None, [], Thinking(), LOG_DIR/f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", []
         self.auto_c, self.auto_t, self.max_s, self.max_t = st.auto_c, st.auto_t, 200, 10
         self.ctx, self.proj, self.tester = None, None, None
@@ -322,12 +330,150 @@ class Bridge:
         if self.ctx.load():
             print_claude(self.ctx.get())
 
+    def _create_session(self):
+        self.sess = self.sm.create_session()
+        self._env_prompt_added = False
+        self._inject_environment_prompt()
+        return self.sess
+
+    def _environment_prompt(self) -> str:
+        env = self.env_info or {}
+        runner = env.get("runner")
+        system = env.get("system", "?")
+        if runner == "wsl":
+            return f"Ambiente host: Windows con WSL. Usa comandi bash/posix. Preferisci percorsi /mnt/... o relativi (working dir: {self._actual_path or self.ops.working_directory})."
+        if runner == "bash":
+            return f"Ambiente host: {system} con bash disponibile. Usa sintassi bash standard; evita percorsi Windows con backslash."
+        if runner == "powershell":
+            return ("Ambiente host: Windows solo PowerShell. NON usare 'cat << 'EOF''. "
+                    "Per creare file multi-line usa: Set-Content -Path <file> -Value @'... '@; "
+                    "per directory usa New-Item -ItemType Directory -Force.")
+        if runner == "cmd":
+            return ("Ambiente host: Windows cmd.exe (nessun bash). Usa comandi compatibili o richiamando "
+                    "PowerShell con \"powershell -Command ...\" per file multi-line.")
+        return f"Ambiente host: {system} (bash). Usa comandi POSIX standard."
+
+    def _filter_shellbot(self, models: list[str]) -> list[str]:
+        """Ritorna solo i modelli shellbot."""
+        return [m for m in models if "shellbot" in m.lower()]
+
+    def _inject_environment_prompt(self):
+        if not self.sess or self._env_prompt_added:
+            return
+        prompt = self._environment_prompt()
+        if prompt:
+            self.sess.add_message("user", prompt)
+            self._env_prompt_added = True
+
+    def _show_environment(self):
+        env = self.env_info or {}
+        runner = env.get("runner", "?")
+        desc = env.get("description", "shell sconosciuta")
+        status(f"OS: {env.get('system', '?')} | Shell: {desc}", "info")
+        if runner == "wsl":
+            status("Esecuzione comandi tramite WSL bash", "info")
+        elif runner == "bash":
+            status("Bash disponibile: comandi POSIX OK", "success")
+        elif runner == "powershell":
+            status("PowerShell: usare cmdlet (Set-Content, New-Item) per file/dir", "warning")
+        elif runner == "cmd":
+            status("Fallback cmd.exe: comandi bash potrebbero fallire", "warning")
+
+    def _normalize_model(self, name: str) -> str:
+        base = name.split('/')[-1] if name else ""
+        return base.split(':')[0].lower()
+
+    def _model_exists(self, models: set[str], name: str) -> bool:
+        norm = self._normalize_model(name)
+        return any(self._normalize_model(m) == norm for m in models)
+
+    def _load_template_modelfile(self) -> Optional[str]:
+        for path in [Path("Modelfile"), Path("modelfiles/Modelfile")]:
+            if path.exists() and path.is_file():
+                try:
+                    return path.read_text()
+                except Exception as e:
+                    logger.error(f"Errore lettura {path}: {e}")
+        return None
+
+    def _write_temp_modelfile(self, template: str, base_model: str, slug: str) -> Path:
+        tmp_dir = LOG_DIR / "modelfile_auto"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        content = re.sub(r'^\s*FROM\s+.+$', f"FROM {base_model}", template, count=1, flags=re.MULTILINE)
+        tmp_path = tmp_dir / f"Modelfile_{slug}"
+        tmp_path.write_text(content, encoding='utf-8')
+        return tmp_path
+
+    def _get_installed_models(self) -> set[str]:
+        models = set()
+        try:
+            models.update(self.ollama.list_models())
+        except Exception as e:
+            logger.error(f"list_models API error: {e}")
+        ok, out = self.ops.execute_command("ollama list", timeout=60)
+        if ok and out:
+            status("📄 ollama list", "info")
+            print_output(out)
+            for line in out.splitlines():
+                parts = line.split()
+                if not parts or parts[0].lower() == "name":
+                    continue
+                models.add(parts[0])
+        elif out:
+            status(f"ollama list fallito: {out}", "warning")
+        return models
+
+    def _auto_convert_models(self):
+        template = self._load_template_modelfile()
+        if not template:
+            status("Nessun Modelfile trovato per conversione automatica", "warning")
+            return
+
+        installed = self._get_installed_models()
+        if not installed:
+            status("Nessun modello locale trovato da ollama", "warning")
+            return
+
+        conversions = 0
+        for model in sorted(installed):
+            base_id = self._normalize_model(model)
+            if not base_id or "shellbot" in base_id:
+                continue
+            target = f"{base_id}-shellbot"
+            target_with_tag = f"{target}:latest"
+            if self._model_exists(installed, target):
+                continue
+
+            temp_path = self._write_temp_modelfile(template, model, base_id)
+            create_cmd = f"ollama create {target_with_tag} -f \"{self.ops.format_path_for_shell(temp_path)}\""
+            status(f"Converto {model} → {target_with_tag}", "running")
+            ok, out = self.ops.execute_command(create_cmd, timeout=600)
+            if ok:
+                status(f"Creato {target_with_tag}", "success")
+                installed.add(target_with_tag)
+                conversions += 1
+            else:
+                status(f"Errore conversione {target_with_tag}", "error")
+                logger.error(out)
+
+        if conversions == 0:
+            status("Nessuna conversione necessaria", "info")
+        else:
+            status(f"Conversioni completate: {conversions}", "success")
     def init(self) -> bool:
         banner()
+        self._show_environment()
         status("Ollama...", "running")
         if not self.ollama.is_available():
             status("Ollama OFF!", "error"); print(f"  {Colors.DIM}$ ollama serve{Colors.RESET}\n"); return False
+        self._auto_convert_models()
         self.models = self.ollama.list_models()
+        shell_models = self._filter_shellbot(self.models)
+        if shell_models:
+            self.models = shell_models
+            if self.ollama.model not in shell_models:
+                self.ollama.model = shell_models[0]
+                status(f"Modello impostato su {self.ollama.model} (solo shellBot)", "info")
         status("Ollama OK", "success")
         status(f"Modello: {Colors.BOLD}{self.ollama.model}{Colors.RESET}", "info")
         if self.models:
@@ -337,7 +483,7 @@ class Bridge:
                 cur = m == self.ollama.model
                 print(f"  {Colors.DIM}│{Colors.RESET} {Colors.GREEN}►{Colors.RESET} {Colors.BOLD}{m}{Colors.RESET}" if cur else f"  {Colors.DIM}│{Colors.RESET} {i}. {Colors.GRAY}{m}{Colors.RESET}")
             print(f"  {Colors.DIM}╰─{Colors.RESET}\n")
-        self.sess = self.sm.create_session()
+        self._create_session()
         status(f"Sessione: {self.sess.id}", "success")
         print(f"  {Colors.DIM}═══════════════════════════════════════════════════════════{Colors.RESET}")
         print(f"  {Colors.GRAY}Comandi: /help /fix /new /reverse /model /safe /auto /test /context /exit{Colors.RESET}")
@@ -394,7 +540,7 @@ class Bridge:
             if i >= self.max_t or fix_attempts >= max_fix_attempts:
                 return False
             fix_attempts += 1
-            self.sess = self.sm.create_session()
+            self._create_session()
             current_content = ""
             test_file = self.tester.find()
             if test_file and test_file.exists():
@@ -503,7 +649,7 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
             iteration += 1
             if not self._plan_done:
                 self._plan_done = True
-                self.sess = self.sm.create_session()
+                self._create_session()
                 if (is_fix_request or self.mode == 'fix') and self.proj and self.proj.exists():
                     file_ctx = self._read_file_context()
                     if file_ctx:
@@ -544,7 +690,7 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                     fix_prompt += "2. NON creare file README.md o CLAUDE.md\n"
                     fix_prompt += "3. Rispondi SOLO con JSON valido\n\n"
                 fix_prompt += "JSON:"
-                self.sess = self.sm.create_session()
+                self._create_session()
                 self.sess.add_message("user", fix_prompt)
                 status(f"Fix per {len(self._failed_commands)} comandi" + (f" su `{func_name}`" if func_match else ""), "running")
             cx = self.ctx.ctx() if self.ctx else ""
@@ -643,7 +789,7 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                         failed_prompt += "4. Usa comandi brevi e mirati (max 5 comandi)\n"
                         failed_prompt += "5. Rispondi SOLO con JSON, niente spiegazioni\n\n"
                         failed_prompt += "JSON dei comandi corretti:"
-                        self.sess = self.sm.create_session()
+                        self._create_session()
                         self.sess.add_message("user", failed_prompt)
                         continue
                     else:
@@ -762,7 +908,7 @@ FILE DEL PROGETTO:
 
 Genera DOCUMENTAZIONE.md in ITALIANO, completo e dettagliato (minimo 1000 parole).
 Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
-        self.sess = self.sm.create_session()
+        self._create_session()
         self.sess.add_message("user", prompt)
 
         # Salva opzioni originali e imposta opzioni elevate per /reverse
@@ -818,7 +964,7 @@ CONTINUA il JSON da dove si è interrotto. Formato:
 
 Importante: chiudi il JSON con }} alla fine."""
         
-        self.sess = self.sm.create_session()
+        self._create_session()
         self.sess.add_message("user", continue_prompt)
         
         try:

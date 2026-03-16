@@ -1,11 +1,29 @@
 """
-Operazioni sul file system con layer di sicurezza.
+Operazioni sul file system con layer di sicurezza e adattamento shell.
 """
 
-import os
+import platform
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
+
+
+def _is_wsl() -> bool:
+    """Rileva se il processo gira dentro WSL."""
+    try:
+        return "microsoft" in platform.release().lower() or "microsoft" in platform.version().lower()
+    except Exception:
+        return False
+
+
+def _to_wsl_path(path: Path) -> str:
+    """Converte un Path di Windows in formato /mnt/<drive>/... per WSL."""
+    if path.drive:
+        drive = path.drive.replace(":", "").lower()
+        rel = path.relative_to(path.anchor).as_posix()
+        return f"/mnt/{drive}/{rel}"
+    return path.as_posix()
 
 
 class FileOperations:
@@ -16,7 +34,9 @@ class FileOperations:
     def __init__(
         self,
         working_directory: str = ".",
-        allowed_directories: Optional[list[str]] = None
+        allowed_directories: Optional[list[str]] = None,
+        shell_override: Optional[str] = None,
+        timeout: int = 30
     ):
         self.working_directory = Path(working_directory).resolve()
         self.allowed_directories = (
@@ -24,37 +44,126 @@ class FileOperations:
             if allowed_directories
             else [self.working_directory]
         )
+        self.timeout = timeout
+        self.shell_info = self._detect_shell_environment(shell_override)
     
-    def execute_command(self, command: str) -> tuple[bool, str]:
+    def _detect_shell_environment(self, shell_override: Optional[str]) -> dict:
+        system = platform.system()
+        is_wsl_env = _is_wsl()
+        desired = shell_override.lower() if shell_override else None
+
+        def info(runner: str, description: str, executable: Optional[str] = None, wsl_workdir: Optional[str] = None) -> dict:
+            return {
+                "system": system,
+                "runner": runner,
+                "description": description,
+                "executable": executable,
+                "wsl_workdir": wsl_workdir,
+            }
+
+        # Precedenza personalizzata
+        if desired in {"powershell", "pwsh"}:
+            return info("powershell", "PowerShell", executable=shutil.which("powershell") or shutil.which("pwsh"))
+        if desired in {"wsl", "bash"}:
+            if desired == "wsl" and shutil.which("wsl"):
+                return info("wsl", "WSL bash", wsl_workdir=_to_wsl_path(self.working_directory))
+            if desired == "bash" and shutil.which("bash"):
+                return info("bash", "Bash (forzato)")
+
+        if system == "Windows" and not is_wsl_env:
+            if shutil.which("wsl"):
+                return info("wsl", "Windows + WSL (bash)", wsl_workdir=_to_wsl_path(self.working_directory))
+            if shutil.which("bash"):
+                return info("bash", "Windows + Git Bash")
+            ps_path = shutil.which("powershell") or shutil.which("pwsh")
+            if ps_path:
+                return info("powershell", "Windows PowerShell", executable=ps_path)
+            return info("cmd", "Windows cmd.exe")
+
+        # Linux / macOS / WSL
+        bash_path = shutil.which("bash")
+        return info("posix", "Posix shell", executable=bash_path)
+
+    def execute_command(self, command: str, timeout: Optional[int] = None) -> tuple[bool, str]:
         """
-        Esegue un comando shell e restituisce (successo, output).
-        
-        Args:
-            command: Il comando da eseguire
-        
-        Returns:
-            Tuple di (successo, output/error message)
+        Esegue un comando shell adattandosi all'ambiente rilevato.
         """
+        runner = self.shell_info.get("runner")
+        timeout = timeout or self.timeout
+
         try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                cwd=self.working_directory,
-                timeout=30
-            )
-            
+            if runner == "wsl":
+                workdir = self.shell_info.get("wsl_workdir") or _to_wsl_path(self.working_directory)
+                wrapped = f"cd \"{workdir}\" && {command}"
+                result = subprocess.run(
+                    ["wsl", "bash", "-lc", wrapped],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            elif runner == "bash":
+                workdir = self.format_path_for_shell(self.working_directory)
+                wrapped = f"cd \"{workdir}\" && {command}"
+                result = subprocess.run(
+                    ["bash", "-lc", wrapped],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            elif runner == "powershell":
+                exe = self.shell_info.get("executable") or "powershell"
+                workdir = str(self.working_directory).replace("'", "''")
+                ps_cmd = f"Set-Location -LiteralPath '{workdir}'; {command}"
+                result = subprocess.run(
+                    [exe, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            elif runner == "posix":
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    executable=self.shell_info.get("executable"),
+                    capture_output=True,
+                    text=True,
+                    cwd=self.working_directory,
+                    timeout=timeout,
+                )
+            else:  # cmd fallback
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=self.working_directory,
+                    timeout=timeout,
+                )
+
             output = result.stdout
             if result.stderr:
                 output += result.stderr
-            
             return (result.returncode == 0, output.strip())
-        
+
         except subprocess.TimeoutExpired:
             return (False, "Timeout: il comando ha impiegato troppo tempo")
         except Exception as e:
             return (False, f"Errore: {str(e)}")
+
+    def format_path_for_shell(self, path: Path) -> str:
+        """Restituisce un path compatibile con la shell corrente."""
+        runner = self.shell_info.get("runner")
+        if runner == "wsl":
+            return _to_wsl_path(path)
+        if runner in {"bash", "posix"}:
+            return path.as_posix()
+        return str(path)
+
+    def environment_info(self) -> dict:
+        """Expose info sull'ambiente per logging/UI."""
+        return self.shell_info | {
+            "working_directory": str(self.working_directory)
+        }
     
     def is_destructive(self, command: str) -> bool:
         """Controlla se un comando è potenzialmente distruttivo."""

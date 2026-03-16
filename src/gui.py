@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from datetime import datetime
 import time
+import re
 
 from src.ollama_client import OllamaClient
 from src.session_manager import SessionManager
@@ -130,6 +131,63 @@ class OllamaBridgeGUI:
 
         # Inizializza connessione
         self._init_ollama()
+
+    # ── Utils modelli shellbot ──────────────────────────────────────────
+    def _normalize_model(self, name: str) -> str:
+        base = name.split('/')[-1] if name else ""
+        return base.split(':')[0].lower()
+
+    def _filter_shellbot(self, models: list[str]) -> list[str]:
+        return [m for m in models if "shellbot" in m.lower()]
+
+    def _model_exists(self, models: set[str], name: str) -> bool:
+        norm = self._normalize_model(name)
+        return any(self._normalize_model(m) == norm for m in models)
+
+    def _load_template_modelfile(self) -> str | None:
+        for path in [Path("Modelfile"), Path("modelfiles/Modelfile")]:
+            if path.exists() and path.is_file():
+                try:
+                    return path.read_text()
+                except Exception:
+                    pass
+        return None
+
+    def _write_temp_modelfile(self, template: str, base_model: str, slug: str) -> Path:
+        tmp_dir = Path("logs") / "modelfile_auto_gui"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        content = re.sub(r'^\s*FROM\s+.+$', f"FROM {base_model}", template, count=1, flags=re.MULTILINE)
+        tmp_path = tmp_dir / f"Modelfile_{slug}"
+        tmp_path.write_text(content, encoding='utf-8')
+        return tmp_path
+
+    def _auto_convert_models(self):
+        template = self._load_template_modelfile()
+        if not template:
+            return
+        try:
+            installed = set(self.ollama.list_models())
+        except Exception:
+            installed = set()
+        if not installed:
+            return
+        for model in sorted(installed):
+            if "shellbot" in model.lower():
+                continue
+            base_id = self._normalize_model(model)
+            target = f"{base_id}-shellbot"
+            target_tag = f"{target}:latest"
+            if self._model_exists(installed, target):
+                continue
+            # crea modelfile temporaneo
+            tmp_path = self._write_temp_modelfile(template, model, base_id)
+            create_cmd = f"ollama create {target_tag} -f \"{tmp_path}\""
+            ok, out = self.file_ops.execute_command(create_cmd, timeout=600)
+            if ok:
+                installed.add(target_tag)
+            else:
+                # log in chat solo se visibile
+                self._add_message(f"⚠️ Conversione {target_tag} fallita: {out[:120]}", "warning")
 
     def _load_config(self) -> dict:
         if CONFIG_FILE.exists():
@@ -535,7 +593,14 @@ class OllamaBridgeGUI:
                 self.ollama = OllamaClient(base_url, model, timeout, options=ollama_options)
 
                 if self.ollama.is_available():
-                    self.models = self.ollama.list_models()
+                    # Autoconversione in varianti shellBot prima di filtrare
+                    self._auto_convert_models()
+
+                    all_models = self.ollama.list_models()
+                    shell_models = [m for m in all_models if "shellbot" in m.lower()]
+                    self.models = shell_models or all_models
+                    if shell_models and self.ollama.model not in shell_models:
+                        self.ollama.model = shell_models[0]
                     self.connected = True
                     self.session = self.session_manager.create_session()
                     self.root.after(0, self._on_connected)
@@ -559,7 +624,7 @@ class OllamaBridgeGUI:
         # Popola lista modelli (TUTTI, non solo il conteggio)
         self.models_listbox.delete(0, tk.END)
         if self.models:
-            self._add_message(f"📦 {len(self.models)} modelli trovati:", "success")
+            self._add_message(f"📦 {len(self.models)} modelli shellBot:", "success")
             for i, m in enumerate(self.models, 1):
                 prefix = "► " if m == self.ollama.model else f"{i}. "
                 self.models_listbox.insert(tk.END, f"{prefix}{m}")
@@ -1254,11 +1319,15 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
         """Aggiorna la lista dei modelli."""
         if self.ollama and self.connected:
             self._add_message("⟳ Aggiornamento modelli...", "info")
-            self.models = self.ollama.list_models()
+            all_models = self.ollama.list_models()
+            shell_models = [m for m in all_models if "shellbot" in m.lower()]
+            self.models = shell_models or all_models
+            if shell_models and self.ollama.model not in shell_models:
+                self.ollama.model = shell_models[0]
             self.models_listbox.delete(0, tk.END)
 
             if self.models:
-                self._add_message(f"✓ {len(self.models)} modelli trovati:", "success")
+                self._add_message(f"✓ {len(self.models)} modelli shellBot:", "success")
                 for i, m in enumerate(self.models, 1):
                     prefix = "► " if m == self.ollama.model else f"{i}. "
                     self.models_listbox.insert(tk.END, f"{prefix}{m}")
