@@ -1,9 +1,8 @@
-FROM qwen3-unlimited:latest
+FROM hf.co/bartowski/burtenshaw_GemmaCoder3-12B-GGUF:Q4_1
 
 PARAMETER num_batch 512
 PARAMETER num_thread 8
 PARAMETER num_predict -1
-# num_predict = -1 significa: nessun limite di output
 
 PARAMETER temperature 0.2
 PARAMETER top_p 0.85
@@ -115,27 +114,6 @@ FILE SIZE LIMIT - CRITICAL:
 This prevents output truncation. Better to have 5 small files than 1 truncated file.
 
 =============================================================================
-EXAMPLE WORKFLOW - QUIZ TABELLINE:
-=============================================================================
-
-Correct sequence:
-
-{"cmd1": "mkdir -p ./quiz_tabelline", "cmd2": "cat << 'EOF' > ./quiz_tabelline/readme.md\n# Quiz Tabelline\n\n## Description\nApp per studiare le tabelline.\n\n## Technologies\n- HTML5\n- CSS3\n- JavaScript\n\n## Files Structure\n| File | Purpose |\n|------|---------|\n| index.html | UI con griglia pulsanti e domande |\n| styles.css | Stili colorati e animazioni |\n| quiz.js | Generatore domande e controllo risposte |\n\n## Status\n- [ ] index.html - to create\n- [ ] styles.css - to create\n- [ ] quiz.js - to create\nEOF", "cmd3": "cat << 'EOF' > ./quiz_tabelline/index.html\n<!DOCTYPE html>\n<html>... (max 250 lines)\n</html>\nEOF", "cmd4": "cat << 'EOF' > ./quiz_tabelline/styles.css\n/* styles */... (max 250 lines)\nEOF", "cmd5": "cat << 'EOF' > ./quiz_tabelline/quiz.js\n// quiz logic... (max 250 lines)\nEOF", "cmd6": "cat << 'EOF' > ./quiz_tabelline/readme.md\n# Quiz Tabelline\n\n## Status\n- [x] index.html - created\n- [x] styles.css - created\n- [x] quiz.js - created\nEOF"}
-
-=============================================================================
-EXAMPLE WORKFLOW - FIX MODE:
-=============================================================================
-
-When fixing existing projects:
-
-1. FIRST read readme.md to understand project structure
-2. Read the file that needs fixing
-3. Apply fix with cat heredoc (rewrite entire file, max 250 lines)
-4. Update readme.md if needed
-
-{"cmd1": "cat << 'EOF' > ./project/file.py\n# fixed code... (max 250 lines)\nEOF"}
-
-=============================================================================
 DOCUMENTATION RULES:
 =============================================================================
 
@@ -150,16 +128,6 @@ MODES (triggered by prefix in user message):
 - /new  -> Create full project following the MANDATORY SEQUENCE above
 - /fix  -> Read readme.md first, then fix the specified file
 - /reverse -> Read ALL files, generate comprehensive DOCUMENTAZIONE.md
-
-=============================================================================
-CORRECT OUTPUT EXAMPLES:
-=============================================================================
-
-Example 1 - Hello World (CORRECT with readme.md):
-{"cmd1": "mkdir -p ./hello", "cmd2": "cat << 'EOF' > ./hello/readme.md\n# Hello World\n\n## Description\nSimple Python project.\n\n## Technologies\n- Python 3\n\n## Files Structure\n| File | Purpose |\n|------|---------|\n| main.py | Entry point - prints hello |\n\n## Status\n- [ ] main.py - to create\nEOF", "cmd3": "cat << 'EOF' > ./hello/main.py\nprint('Hello, World!')\nEOF", "cmd4": "cat << 'EOF' > ./hello/readme.md\n# Hello World\n\n## Status\n- [x] main.py - created\nEOF"}
-
-Example 2 - Tic Tac Toe (CORRECT sequence):
-{"cmd1": "mkdir -p ./tris", "cmd2": "cat << 'EOF' > ./tris/readme.md\n# Tris\n\n## Description\nTic Tac Toe game in Python.\n\n## Technologies\n- Python 3\n\n## Files Structure\n| File | Purpose |\n|------|---------|\n| game.py | Game logic and board rendering |\n\n## Status\n- [ ] game.py - to create\nEOF", "cmd3": "cat << 'EOF' > ./tris/game.py\nboard = [' '] * 9\n\ndef show(b):\n    for i in range(0, 9, 3):\n        print(f' {b[i]} | {b[i+1]} | {b[i+2]}')\n        if i < 6: print('---+---+---')\n\ndef winner(b, p):\n    wins = [(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]\n    return any(b[a]==b[b]==b[c]==p for a,b,c in wins)\n\ndef main():\n    b = [' ']*9\n    for turn in range(9):\n        p = 'X' if turn%2==0 else 'O'\n        show(b)\n        while True:\n            try:\n                m = int(input(f'{p} move (1-9): '))-1\n                if b[m]==' ': b[m]=p; break\n            except: pass\n        if winner(b, p):\n            show(b); print(f'{p} wins!'); return\n    show(b); print('Draw!')\n\nif __name__ == '__main__':\n    main()\nEOF", "cmd4": "cat << 'EOF' > ./tris/readme.md\n# Tris\n\n## Status\n- [x] game.py - created\nEOF"}
 
 =============================================================================
 IMPORTANT:

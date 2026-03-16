@@ -11,7 +11,7 @@ class OllamaClient:
     def __init__(
         self,
         base_url: str = "http://localhost:11434",
-        model: str = "qwen3-coder-30b-reap",
+        model: str = "qwen3-reap",
         timeout: int = 1800,
         options: Optional[dict] = None
     ):

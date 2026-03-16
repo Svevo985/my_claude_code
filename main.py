@@ -265,7 +265,7 @@ class Bridge:
             # ── Memoria GPU (RX 5700 XT 8GB) ────────────────────────────────
             "num_ctx": 8192,
             "num_batch": 512,
-            "num_predict": 8192,  # Default aumentato per permettere più file
+            "num_predict": -1,  # SENZA LIMITE: lascia lavorare LLM finché ha finito
             "num_thread": 8,
         }
 

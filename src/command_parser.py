@@ -22,6 +22,10 @@ class CommandParser:
         original_response = response
         response = response.strip()
 
+        # 0. RIMUOVI thinking tags (<think>...</think>) - alcuni modelli li usano
+        response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL | re.IGNORECASE)
+        response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL | re.IGNORECASE)
+
         # 1. PRIORITA': cerca JSON dentro code block markdown
         block_matches = self.JSON_BLOCK_PATTERN.findall(response)
         if block_matches:
