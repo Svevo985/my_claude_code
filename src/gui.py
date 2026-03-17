@@ -133,16 +133,23 @@ class OllamaBridgeGUI:
         self._init_ollama()
 
     # ── Utils modelli shellbot ──────────────────────────────────────────
-    def _normalize_model(self, name: str) -> str:
-        base = name.split('/')[-1] if name else ""
-        return base.split(':')[0].lower()
+    def _sanitize_model_name(self, name: str) -> str:
+        if not name:
+            return ""
+        safe = re.sub(r'[^a-zA-Z0-9._-]+', '-', name.strip())
+        safe = re.sub(r'-{2,}', '-', safe).strip('-').lower()
+        return safe
+
+    def _shellbot_target_name(self, model: str) -> str:
+        base = self._sanitize_model_name(model)
+        return f"{base}-shellbot" if base else ""
 
     def _filter_shellbot(self, models: list[str]) -> list[str]:
         return [m for m in models if "shellbot" in m.lower()]
 
-    def _model_exists(self, models: set[str], name: str) -> bool:
-        norm = self._normalize_model(name)
-        return any(self._normalize_model(m) == norm for m in models)
+    def _target_exists(self, models: set[str], target: str, target_with_tag: str) -> bool:
+        lowered = {m.lower() for m in models}
+        return target.lower() in lowered or target_with_tag.lower() in lowered
 
     def _load_template_modelfile(self) -> str | None:
         for path in [Path("Modelfile"), Path("modelfiles/Modelfile")]:
@@ -174,14 +181,16 @@ class OllamaBridgeGUI:
         for model in sorted(installed):
             if "shellbot" in model.lower():
                 continue
-            base_id = self._normalize_model(model)
-            target = f"{base_id}-shellbot"
+            target = self._shellbot_target_name(model)
+            if not target:
+                continue
             target_tag = f"{target}:latest"
-            if self._model_exists(installed, target):
+            if self._target_exists(installed, target, target_tag):
                 continue
             # crea modelfile temporaneo
-            tmp_path = self._write_temp_modelfile(template, model, base_id)
-            create_cmd = f"ollama create {target_tag} -f \"{tmp_path}\""
+            slug = self._sanitize_model_name(model)[:120]
+            tmp_path = self._write_temp_modelfile(template, model, slug)
+            create_cmd = f"ollama create {target_tag} -f \"{self.file_ops.format_path_for_shell(tmp_path)}\""
             ok, out = self.file_ops.execute_command(create_cmd, timeout=600)
             if ok:
                 installed.add(target_tag)

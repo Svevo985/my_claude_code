@@ -379,13 +379,20 @@ class Bridge:
         elif runner == "cmd":
             status("Fallback cmd.exe: comandi bash potrebbero fallire", "warning")
 
-    def _normalize_model(self, name: str) -> str:
-        base = name.split('/')[-1] if name else ""
-        return base.split(':')[0].lower()
+    def _sanitize_model_name(self, name: str) -> str:
+        if not name:
+            return ""
+        safe = re.sub(r'[^a-zA-Z0-9._-]+', '-', name.strip())
+        safe = re.sub(r'-{2,}', '-', safe).strip('-').lower()
+        return safe
 
-    def _model_exists(self, models: set[str], name: str) -> bool:
-        norm = self._normalize_model(name)
-        return any(self._normalize_model(m) == norm for m in models)
+    def _shellbot_target_name(self, model: str) -> str:
+        base = self._sanitize_model_name(model)
+        return f"{base}-shellbot" if base else ""
+
+    def _target_exists(self, models: set[str], target: str, target_with_tag: str) -> bool:
+        lowered = {m.lower() for m in models}
+        return target.lower() in lowered or target_with_tag.lower() in lowered
 
     def _load_template_modelfile(self) -> Optional[str]:
         for path in [Path("Modelfile"), Path("modelfiles/Modelfile")]:
@@ -436,15 +443,17 @@ class Bridge:
 
         conversions = 0
         for model in sorted(installed):
-            base_id = self._normalize_model(model)
-            if not base_id or "shellbot" in base_id:
+            if "shellbot" in model.lower():
                 continue
-            target = f"{base_id}-shellbot"
+            target = self._shellbot_target_name(model)
+            if not target:
+                continue
             target_with_tag = f"{target}:latest"
-            if self._model_exists(installed, target):
+            if self._target_exists(installed, target, target_with_tag):
                 continue
 
-            temp_path = self._write_temp_modelfile(template, model, base_id)
+            slug = self._sanitize_model_name(model)[:120]
+            temp_path = self._write_temp_modelfile(template, model, slug)
             create_cmd = f"ollama create {target_with_tag} -f \"{self.ops.format_path_for_shell(temp_path)}\""
             status(f"Converto {model} → {target_with_tag}", "running")
             ok, out = self.ops.execute_command(create_cmd, timeout=600)
