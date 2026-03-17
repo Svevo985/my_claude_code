@@ -17,6 +17,22 @@ def _is_wsl() -> bool:
         return False
 
 
+def _wsl_usable() -> bool:
+    """Verifica se WSL e bash sono realmente utilizzabili."""
+    if not shutil.which("wsl"):
+        return False
+    try:
+        result = subprocess.run(
+            ["wsl", "-e", "bash", "-lc", "echo ok"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        return result.returncode == 0 and "ok" in (result.stdout or "").lower()
+    except Exception:
+        return False
+
+
 def _to_wsl_path(path: Path) -> str:
     """Converte un Path di Windows in formato /mnt/<drive>/... per WSL."""
     if path.drive:
@@ -65,13 +81,13 @@ class FileOperations:
         if desired in {"powershell", "pwsh"}:
             return info("powershell", "PowerShell", executable=shutil.which("powershell") or shutil.which("pwsh"))
         if desired in {"wsl", "bash"}:
-            if desired == "wsl" and shutil.which("wsl"):
+            if desired == "wsl" and _wsl_usable():
                 return info("wsl", "WSL bash", wsl_workdir=_to_wsl_path(self.working_directory))
             if desired == "bash" and shutil.which("bash"):
                 return info("bash", "Bash (forzato)")
 
         if system == "Windows" and not is_wsl_env:
-            if shutil.which("wsl"):
+            if _wsl_usable():
                 return info("wsl", "Windows + WSL (bash)", wsl_workdir=_to_wsl_path(self.working_directory))
             if shutil.which("bash"):
                 return info("bash", "Windows + Git Bash")

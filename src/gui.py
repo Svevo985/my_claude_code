@@ -17,6 +17,19 @@ from src.ollama_client import OllamaClient
 from src.session_manager import SessionManager
 from src.file_operations import FileOperations
 from src.command_parser import CommandParser
+from src.project_scanner import (
+    build_tree_from_paths,
+    collect_candidate_files,
+    collect_candidate_files_with_stats,
+    apply_reverse_policy,
+    find_primary_docs,
+    determine_source_roots,
+    format_candidate_index,
+    pick_default_files,
+    extract_requested_files,
+    read_files_content,
+    read_files_content_with_stats,
+)
 
 CONFIG_FILE = Path("./config.json")
 STATE_FILE = Path("./.ollama_bridge_state.json")
@@ -98,7 +111,12 @@ class OllamaBridgeGUI:
         self.ollama = None
         self.session_manager = SessionManager()
         self.session = None
-        self.file_ops = FileOperations(self.config.get("working_directory", "."))
+        self.file_ops = FileOperations(
+            self.config.get("working_directory", "."),
+            shell_override=self.config.get("shell", {}).get("override")
+        )
+        self.env_info = self.file_ops.environment_info()
+        self.command_style = self._command_style_from_env(self.env_info)
         self.parser = CommandParser()
 
         # Stato
@@ -149,6 +167,12 @@ class OllamaBridgeGUI:
     def _filter_shellbot(self, models: list[str]) -> list[str]:
         return [m for m in models if "shellbot" in m.lower()]
 
+    def _command_style_from_env(self, env: dict) -> str:
+        runner = (env or {}).get("runner", "")
+        if runner in {"powershell", "cmd"}:
+            return "powershell"
+        return "posix"
+
     def _target_exists(self, models: set[str], target: str, target_with_tag: str) -> bool:
         lowered = {m.lower() for m in models}
         return target.lower() in lowered or target_with_tag.lower() in lowered
@@ -168,7 +192,16 @@ class OllamaBridgeGUI:
             return (False, f"Errore: {e}")
 
     def _load_template_modelfile(self) -> str | None:
-        for path in [Path("Modelfile"), Path("modelfiles/Modelfile")]:
+        candidates: list[Path] = []
+        if self.command_style == "powershell":
+            candidates += [
+                Path("modelfiles/Modelfile_windows"),
+                Path("Modelfile_windows"),
+                Path("modelfiles/Modelfile_powershell"),
+                Path("Modelfile_powershell"),
+            ]
+        candidates += [Path("Modelfile"), Path("modelfiles/Modelfile")]
+        for path in candidates:
             if path.exists() and path.is_file():
                 try:
                     return path.read_text()
@@ -180,16 +213,32 @@ class OllamaBridgeGUI:
         tmp_dir = Path("logs") / "modelfile_auto_gui"
         tmp_dir.mkdir(parents=True, exist_ok=True)
         content = re.sub(r'^\s*FROM\s+.+$', f"FROM {base_model}", template, count=1, flags=re.MULTILINE)
-        tmp_path = tmp_dir / f"Modelfile_{slug}"
+        style = self.command_style or "posix"
+        tmp_path = tmp_dir / f"Modelfile_{slug}_{style}"
         tmp_path.write_text(content, encoding='utf-8')
         return tmp_path
+
+    def _get_installed_models(self) -> set[str]:
+        models = set()
+        try:
+            models.update(self.ollama.list_models())
+        except Exception:
+            pass
+        ok, out = self.file_ops.execute_command("ollama list", timeout=60)
+        if ok and out:
+            for line in out.splitlines():
+                parts = line.split()
+                if not parts or parts[0].lower() == "name":
+                    continue
+                models.add(parts[0])
+        return models
 
     def _auto_convert_models(self):
         template = self._load_template_modelfile()
         if not template:
             return
         try:
-            installed = set(self.ollama.list_models())
+            installed = self._get_installed_models()
         except Exception:
             installed = set()
         if not installed:
@@ -598,6 +647,16 @@ class OllamaBridgeGUI:
         self.chat_display.tag_configure("banner", foreground=self.colors["cyan"], font=("Consolas", 9, "bold"))
         self.chat_display.tag_configure("model_list", foreground=self.colors["fg"], font=("Consolas", 9))
 
+    def _reverse_log(self, msg: str):
+        try:
+            log_file = Path("logs") / "reverse_gui.log"
+            log_file.parent.mkdir(exist_ok=True)
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"[{ts}] {msg}\n")
+        except Exception:
+            pass
+
     def _init_ollama(self):
         """Inizializza la connessione a Ollama."""
         def connect():
@@ -663,6 +722,10 @@ class OllamaBridgeGUI:
         self._add_message("╔═══════════════════════════════════════════════════════════╗", "banner")
         self._add_message("║   Benvenuto in Ollama File System Bridge!                 ║", "banner")
         self._add_message("╚═══════════════════════════════════════════════════════════╝", "banner")
+        self._add_message("", "info")
+        os_name = self.env_info.get("system", "?")
+        shell_desc = self.env_info.get("description", "?")
+        self._add_message(f"OS: {os_name} | Shell: {shell_desc}", "info")
         self._add_message("", "info")
         self._add_message(f"🤖 Modello attivo: {self.ollama.model}", "success")
         self._add_message("", "info")
@@ -757,6 +820,16 @@ class OllamaBridgeGUI:
             self._execute_local_command(message)
             return
 
+        # ✅ Auto-detect reverse engineering da richiesta naturale con path
+        auto_path = self._extract_path_from_text(message)
+        if auto_path and (self._looks_like_reverse_intent(message) or self._is_just_path(message, auto_path)):
+            self._add_message(message, "user")
+            self.input_field.delete("1.0", tk.END)
+            self.stop_flag = False
+            self._add_message(f"📖 Reverse Engineering di: {auto_path}", "info")
+            self._reverse_engineer_gui(auto_path)
+            return
+
         # Reset stop flag
         self.stop_flag = False
 
@@ -829,7 +902,7 @@ class OllamaBridgeGUI:
 
         elif command == '/reverse':
             if args:
-                target_path = Path(args.strip())
+                target_path = Path(self._strip_surrounding_quotes(args.strip()))
                 if not target_path.exists():
                     self._add_message(f"❌ Path non trovato: {target_path}", "error")
                     return
@@ -845,6 +918,51 @@ class OllamaBridgeGUI:
         else:
             self._add_message(f"❌ Comando sconosciuto: {command}", "error")
             self._add_message("💡 Usa /help per vedere tutti i comandi", "info")
+
+    def _strip_surrounding_quotes(self, text: str) -> str:
+        t = text.strip()
+        if len(t) >= 2 and ((t[0] == t[-1] == '"') or (t[0] == t[-1] == "'")):
+            return t[1:-1]
+        return t
+
+    def _is_just_path(self, text: str, path: Path) -> bool:
+        t = text.strip()
+        p = str(path)
+        return t == p or t == f'"{p}"' or t == f"'{p}'"
+
+    def _looks_like_reverse_intent(self, text: str) -> bool:
+        t = text.lower()
+        keywords = [
+            "reverse", "documentazione", "documenta", "cosa fa", "descrivi",
+            "spiega", "capire", "analizza", "analisi", "panoramica"
+        ]
+        return any(k in t for k in keywords)
+
+    def _extract_path_from_text(self, text: str) -> Path | None:
+        # 1) Cerca path tra virgolette
+        for match in re.findall(r"[\"']([^\"']+)[\"']", text):
+            candidate = match.strip().rstrip(".,);")
+            p = Path(candidate)
+            if p.exists():
+                return p
+
+        # 2) Windows assoluto non quotato
+        m = re.search(r"([A-Za-z]:\\[^\\n\"']+)", text)
+        if m:
+            candidate = m.group(1).strip().rstrip(".,);")
+            p = Path(candidate)
+            if p.exists():
+                return p
+
+        # 3) POSIX assoluto non quotato
+        m = re.search(r"(/[^\\s\"']+)", text)
+        if m:
+            candidate = m.group(1).strip().rstrip(".,);")
+            p = Path(candidate)
+            if p.exists():
+                return p
+
+        return None
 
     def _show_help(self):
         """Mostra aiuto completo."""
@@ -944,116 +1062,190 @@ class OllamaBridgeGUI:
             self.root.after(0, lambda: self.thinking_anim.start(self.thinking_container))
             
             try:
-                # Salva num_predict originale e aumenta per reverse
-                original_num_predict = self.ollama.options.get('num_predict', 2048)
-                self.ollama.options['num_predict'] = 4096  # Più token per documentazione
-                
-                # Leggi tutti i file del progetto
-                self.root.after(0, lambda: self._add_message(f"📂 Lettura file da: {target}", "info"))
-                
-                files_content = ""
-                file_count = 0
-                extensions = ['.md', '.txt', '.py', '.js', '.ts', '.java', '.go', '.rs', '.cpp', '.c', '.h', '.html', '.css', '.json', '.yaml', '.yml', '.toml', '.xml', '.sql', '.sh']
-                
-                for ext in extensions:
-                    for f in target.rglob(f"*{ext}"):
-                        if file_count >= 50:
-                            break
-                        try:
-                            content = f.read_text()
-                            rel_path = f.relative_to(target)
-                            files_content += f"## {rel_path}:\n```\n{content[:2000]}\n```\n\n"
-                            file_count += 1
-                        except Exception as e:
-                            pass
-                    if file_count >= 50:
-                        break
-                
-                if file_count == 0:
-                    self.root.after(0, lambda: self._add_message("❌ Nessun file trovato", "error"))
+                self._reverse_log(f"reverse_start target={target}")
+                # Scansione struttura e indice file
+                self.root.after(0, lambda: self._add_message(f"📂 Scansione struttura: {target}", "info"))
+                candidates, stats = collect_candidate_files_with_stats(target, max_files=200)
+                self._reverse_log(f"stats_seen_files={stats.get('seen_files')}")
+                self._reverse_log(f"stats_ignored_dirs={stats.get('ignored_dirs')}")
+                self._reverse_log(f"stats_ignored_ext={stats.get('ignored_ext')}")
+                self._reverse_log(f"stats_ignored_size={stats.get('ignored_size')}")
+                self._reverse_log(f"stats_ignored_other={stats.get('ignored_other')}")
+                self._reverse_log(f"candidates={len(candidates)} truncated={stats.get('truncated')}")
+
+                candidates, policy = apply_reverse_policy(target, candidates, max_candidates=40)
+                self._reverse_log(f"policy_docs={policy.get('docs')}")
+                self._reverse_log(f"policy_source_roots={policy.get('source_roots')}")
+                self._reverse_log(f"policy_candidates_after={policy.get('candidates_after')}")
+                self._reverse_log(f"policy_excluded_tests={policy.get('excluded_tests')}")
+                self._reverse_log(f"policy_excluded_config={policy.get('excluded_config')}")
+                self._reverse_log(f"policy_limited={policy.get('limited')} limit={policy.get('limit')}")
+                self.root.after(0, lambda d=policy.get("docs", []), r=policy.get("source_roots", []), c=policy.get("candidates_after", 0):
+                    self._add_message(
+                        f"📌 Policy: docs={d if d else 'none'} | roots={r if r else 'all'} | candidati={c}",
+                        "info",
+                    )
+                )
+
+                seen_files = stats.get("seen_files", 0)
+                ignored = stats.get("ignored_ext", 0) + stats.get("ignored_size", 0) + stats.get("ignored_other", 0)
+                self.root.after(0, lambda s=seen_files, i=ignored, c=len(candidates), d=stats.get("ignored_dirs", 0):
+                    self._add_message(
+                        f"📊 File visti: {s} | scartati scan: {i} | candidati(post-policy): {c} | dir ignorate: {d}",
+                        "info",
+                    )
+                )
+                self.root.after(0, lambda e=policy.get("excluded_tests", 0), cfg=policy.get("excluded_config", 0), lim=policy.get("limited", False), l=policy.get("limit", 0):
+                    self._add_message(
+                        f"🧹 Policy: test esclusi={e} | config esclusi={cfg} | limite candidati={l} | limitato={lim}",
+                        "info",
+                    )
+                )
+                if not candidates:
+                    self._reverse_log("no_candidates")
+                    self.root.after(0, lambda: self._add_message("❌ Nessun file rilevante trovato", "error"))
                     return
-                
-                self.root.after(0, lambda: self._add_message(f"✓ Letti {file_count} file", "success"))
-                
-                # Crea prompt per l'LLM
+                tree = build_tree_from_paths(
+                    [rel for rel, _, _ in candidates],
+                    root_name=target.name,
+                    max_lines=400,
+                )
+                self._reverse_log(f"tree_lines={tree.count(chr(10)) + 1 if tree else 0}")
+                index_text, allowed_set = format_candidate_index(candidates)
+
+                # Fase 1: selezione file da leggere
+                select_prompt = f"""Sei un technical writer. Ti fornisco SOLO una struttura filtrata e l'indice file.
+
+STRUTTURA FILTRATA:
+{tree}
+
+INDICE FILE (dimensione e tag):
+{index_text}
+
+Seleziona SOLO i file necessari per capire il progetto.
+Regole:
+- Max 12 file
+- Evita log/build/temp/lock
+- Preferisci entrypoint, config, e sorgenti principali
+
+Rispondi SOLO con JSON:
+{{"cmd1": "READ <percorso_relativo>", "cmd2": "READ <percorso_relativo>", ...}}
+Non usare comandi shell, solo READ + path relativo."""
+
+                self.session = self.session_manager.create_session()
+                self.session.add_message("user", select_prompt)
+                select_resp = ""
+                for chunk in self.ollama.chat(self.session.to_ollama_messages(), stream=True):
+                    if self.stop_flag:
+                        self.root.after(0, lambda: self._add_message("⏹️ [Interrotto]", "warning"))
+                        break
+                    select_resp += chunk
+                self._reverse_log(f"select_resp_len={len(select_resp)}")
+                self._reverse_log(f"select_resp_raw={select_resp.strip()[:2000]}")
+
+                selected_by_llm = []
+                selection_source = "llm"
+                p_sel = self.parser.parse(select_resp)
+                if p_sel.is_valid and p_sel.commands:
+                    selected_by_llm = extract_requested_files(p_sel.commands, target, allowed_set, max_files=12)
+                    self._reverse_log(f"select_commands={len(p_sel.commands)} selected={len(selected_by_llm)}")
+                else:
+                    self._reverse_log("select_parse_failed")
+                if not selected_by_llm:
+                    selection_source = "fallback"
+                    selected_by_llm = pick_default_files(candidates, limit=10)
+                    self._reverse_log(f"fallback_selected={len(selected_by_llm)}")
+
+                selected = list(selected_by_llm)
+
+                # Includi sempre README/CLAUDE se presenti (aggiunti dal bridge)
+                docs = find_primary_docs(target)
+                added_docs = []
+                for d in docs:
+                    if d not in selected:
+                        selected.insert(0, d)
+                        added_docs.append(d)
+
+                selected_list = "\n".join([f"- {p.as_posix()}" for p in selected])
+                self._reverse_log("selected_files=" + ",".join([p.as_posix() for p in selected]))
+
+                llm_list = "\n".join([f"- {p.as_posix()}" for p in selected_by_llm])
+                label = "File selezionati dall'LLM" if selection_source == "llm" else "File selezionati di default"
+                self.root.after(0, lambda s=llm_list, n=len(selected_by_llm), l=label:
+                    self._add_message(f"📚 {l} ({n}):\n{s}", "code")
+                )
+                if added_docs:
+                    added_list = "\n".join([f"- {p.as_posix()}" for p in added_docs])
+                    self.root.after(0, lambda s=added_list:
+                        self._add_message(f"📎 File aggiunti dal bridge (docs):\n{s}", "code")
+                    )
+
+                files_content, read_stats = read_files_content_with_stats(
+                    target, selected, max_chars_per_file=4000, max_total_chars=20000
+                )
+                self._reverse_log(f"files_content_len={len(files_content)}")
+                self._reverse_log(f"files_read={read_stats.get('files_read')} total_chars={read_stats.get('total_chars')} truncated={read_stats.get('truncated')}")
+                if not files_content:
+                    self._reverse_log("no_files_content")
+                    self.root.after(0, lambda: self._add_message("❌ Nessun contenuto letto", "error"))
+                    return
+                self.root.after(0, lambda r=read_stats.get("files_read", 0), ch=read_stats.get("total_chars", 0):
+                    self._add_message(f"📥 File letti: {r} | caratteri totali: {ch}", "info")
+                )
+
+                # Fase 2: genera documentazione
+                original_num_predict = self.ollama.options.get('num_predict', 2048)
+                original_num_ctx = self.ollama.options.get('num_ctx', 8192)
+                self.ollama.options['num_ctx'] = 8192
+                self.ollama.options['num_predict'] = 4096
+                self._reverse_log("llm_options num_ctx=8192 num_predict=4096")
+
                 prompt = f"""Sei un technical writer esperto. Genera documentazione COMPLETA per questo progetto.
+Usa SOLO i file forniti; se manca qualche informazione, dichiaralo.
+
+STRUTTURA FILTRATA:
+{tree}
+
+FILE SELEZIONATI:
+{selected_list}
+
+CONTENUTI FILE:
+{files_content}
 
 DOCUMENTAZIONE.md DEVE CONTENERE (IN QUESTO ORDINE):
+1) PANORAMICA DEL PROGETTO
+2) STRUTTURA DEL PROGETTO (ASCII TREE)
+3) FILE PRINCIPALI
+4) FLUSSO DI ESECUZIONE
+5) API / FUNZIONI PUBBLICHE
+6) CONFIGURAZIONE
+7) NOTE AGGIUNTIVE
 
-### 1. PANORAMICA DEL PROGETTO
-- Nome del progetto
-- Scopo principale (cosa fa)
-- Linguaggi e tecnologie usate
-- Architettura generale
-
-### 2. STRUTTURA DEL PROGETTO (ASCII TREE)
-Disegna diagramma ASCII della struttura file come:
-```
-project/
-├── src/
-│   ├── main.py      # Entry point
-│   └── utils.py     # Funzioni helper
-└── README.md
-```
-
-### 3. FILE PRINCIPALI
-Per ogni file importante:
-- **Nome file**
-- **Scopo**: cosa fa
-- **Funzioni/Classi principali**
-
-### 4. FLUSSO DI ESECUZIONE
-Descrizione passo-passo di come esegue
-
-### 5. API / FUNZIONI PUBBLICHE
-Per ogni funzione pubblica:
-```
-nome_funzione(param1, param2) → return_type
-  Scopo: descrizione
-  Parametri e Returns
-```
-
-### 6. CONFIGURAZIONE
-- File di configurazione
-- Variabili d'ambiente
-- Comandi install/run
-
-### 7. NOTE AGGIUNTIVE
-- Pattern architetturali
-- Decisioni di design
-- Limitazioni
-
-FILE DEL PROGETTO:
-{files_content[:15000]}
-
-Genera DOCUMENTAZIONE.md in ITALIANO, completo e dettagliato (minimo 1000 parole).
+Genera DOCUMENTAZIONE.md in ITALIANO (minimo 800 parole).
 Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
-                
-                # Invia all'LLM
-                if not self.session:
-                    self.root.after(0, lambda: self._new_session())
-                
+
+                self.session = self.session_manager.create_session()
                 self.session.add_message("user", prompt)
-                messages = self.session.to_ollama_messages()
-                
                 response = ""
-                for chunk in self.ollama.chat(messages, stream=True):
+                for chunk in self.ollama.chat(self.session.to_ollama_messages(), stream=True):
                     if self.stop_flag:
                         self.root.after(0, lambda: self._add_message("⏹️ [Interrotto]", "warning"))
                         break
                     response += chunk
-                
-                # Ripristina num_predict originale
+                self._reverse_log(f"final_resp_len={len(response)}")
+
+                # Ripristina opzioni
                 self.ollama.options['num_predict'] = original_num_predict
+                self.ollama.options['num_ctx'] = original_num_ctx
                 self.root.after(0, lambda: self.thinking_anim.stop())
-                
+
                 if response:
                     self.root.after(0, lambda: self._add_message(f"📝 Response ({len(response)} chars):", "info"))
                     self.root.after(0, lambda: self._add_message(response[:2000] + ("..." if len(response) > 2000 else ""), "code"))
-                    
-                    # Parsa ed esegui comandi
+
                     parsed = self.parser.parse(response)
                     if parsed.is_valid and parsed.commands:
+                        self._reverse_log(f"final_commands={len(parsed.commands)}")
                         self.root.after(0, lambda: self._add_message(f"✓ {len(parsed.commands)} comandi", "success"))
                         for i, cmd in enumerate(parsed.commands, 1):
                             ok, out = self.file_ops.execute_command(cmd)
@@ -1061,26 +1253,21 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                                 self.root.after(0, lambda idx=i: self._add_message(f"✓ Comando {idx} eseguito", "success"))
                             else:
                                 self.root.after(0, lambda e=out, idx=i: self._add_message(f"✗ Comando {idx}: {e}", "error"))
-                        
-                        # Salva documentazione
+
                         doc_file = target / "DOCUMENTAZIONE.md"
                         if doc_file.exists():
                             self.root.after(0, lambda: self._add_message(f"📝 Documentazione salvata: {doc_file}", "success"))
                             content = doc_file.read_text()[:1500]
                             self.root.after(0, lambda c=content: self._add_message(f"\n{c}...", "code"))
                     else:
-                        # Se parsing fallisce, salva comunque la response come doc
+                        # fallback: salva response come doc se contiene markdown
                         self.root.after(0, lambda: self._add_message("💡 Salvataggio manuale della documentazione...", "info"))
                         doc_file = target / "DOCUMENTAZIONE.md"
-                        # Estrai contenuto markdown dalla response
                         md_start = response.find('# ')
                         if md_start >= 0:
                             doc_content = response[md_start:]
-                            # ✅ Converti \n letterali in newline reali
                             doc_content = doc_content.replace('\\n', '\n')
-                            # Rimuovi doppi spazi prima dei newline
                             doc_content = re.sub(r' +\n', '\n', doc_content)
-                            # Rimuovi newline multiple consecutive (max 2)
                             doc_content = re.sub(r'\n{3,}', '\n\n', doc_content)
                             try:
                                 doc_file.write_text(doc_content)

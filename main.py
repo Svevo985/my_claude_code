@@ -9,12 +9,26 @@ from src.ollama_client import OllamaClient
 from src.file_operations import FileOperations
 from src.command_parser import CommandParser
 from src.session_manager import SessionManager, Session
+from src.project_scanner import (
+    build_tree_from_paths,
+    collect_candidate_files,
+    collect_candidate_files_with_stats,
+    apply_reverse_policy,
+    find_primary_docs,
+    determine_source_roots,
+    format_candidate_index,
+    pick_default_files,
+    extract_requested_files,
+    read_files_content,
+    read_files_content_with_stats,
+)
 
 LOG_DIR = Path("./logs")
 LOG_DIR.mkdir(exist_ok=True)
 STATE_FILE = Path("./.ollama_bridge_state.json")
 COMMAND_HISTORY = []
 HISTORY_FILE = Path.home() / ".ollama_bridge_history"
+REVERSE_LOG = LOG_DIR / "reverse_cli.log"
 
 def load_history():
     if HISTORY_FILE.exists():
@@ -280,10 +294,12 @@ class Bridge:
         self.ops = FileOperations(
             cfg.get("working_directory", "."),
             allowed_directories=allowed_dirs if allowed_dirs else None,
+            shell_override=cfg.get("shell", {}).get("override"),
             timeout=cfg.get("shell", {}).get("timeout", 30)
         )
         self.parser, self.sm = CommandParser(), SessionManager()
         self.env_info = self.ops.environment_info()
+        self.command_style = self._command_style_from_env(self.env_info)
         self._env_prompt_added = False
         self.sess, self.models, self.thinking, self.log_f, self.logs = None, [], Thinking(), LOG_DIR/f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", []
         self.auto_c, self.auto_t, self.max_s, self.max_t = st.auto_c, st.auto_t, 200, 10
@@ -379,6 +395,21 @@ class Bridge:
         elif runner == "cmd":
             status("Fallback cmd.exe: comandi bash potrebbero fallire", "warning")
 
+    def _reverse_log(self, msg: str):
+        try:
+            REVERSE_LOG.parent.mkdir(exist_ok=True)
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(REVERSE_LOG, "a", encoding="utf-8") as f:
+                f.write(f"[{ts}] {msg}\n")
+        except Exception:
+            pass
+
+    def _command_style_from_env(self, env: dict) -> str:
+        runner = (env or {}).get("runner", "")
+        if runner in {"powershell", "cmd"}:
+            return "powershell"
+        return "posix"
+
     def _sanitize_model_name(self, name: str) -> str:
         if not name:
             return ""
@@ -409,7 +440,16 @@ class Bridge:
             return (False, f"Errore: {e}")
 
     def _load_template_modelfile(self) -> Optional[str]:
-        for path in [Path("Modelfile"), Path("modelfiles/Modelfile")]:
+        candidates: List[Path] = []
+        if self.command_style == "powershell":
+            candidates += [
+                Path("modelfiles/Modelfile_windows"),
+                Path("Modelfile_windows"),
+                Path("modelfiles/Modelfile_powershell"),
+                Path("Modelfile_powershell"),
+            ]
+        candidates += [Path("Modelfile"), Path("modelfiles/Modelfile")]
+        for path in candidates:
             if path.exists() and path.is_file():
                 try:
                     return path.read_text()
@@ -421,7 +461,8 @@ class Bridge:
         tmp_dir = LOG_DIR / "modelfile_auto"
         tmp_dir.mkdir(parents=True, exist_ok=True)
         content = re.sub(r'^\s*FROM\s+.+$', f"FROM {base_model}", template, count=1, flags=re.MULTILINE)
-        tmp_path = tmp_dir / f"Modelfile_{slug}"
+        style = self.command_style or "posix"
+        tmp_path = tmp_dir / f"Modelfile_{slug}_{style}"
         tmp_path.write_text(content, encoding='utf-8')
         return tmp_path
 
@@ -872,91 +913,157 @@ JSON:"""
 
     def _reverse_engineer(self, target: Path) -> str:
         """Genera documentazione per un progetto."""
-        status("📖 Lettura file progetto...", "running")
-        files_content = ""
-        file_count = 0
-        for ext in ['.md', '.txt', '.py', '.js', '.ts', '.java', '.go', '.rs', '.cpp', '.c', '.h', '.html', '.css', '.json', '.yaml', '.yml', '.toml', '.xml', '.sql', '.sh']:
-            for f in target.rglob(f"*{ext}"):
-                if file_count >= 50: break
-                try:
-                    content = f.read_text()
-                    rel_path = f.relative_to(target)
-                    files_content += f"## {rel_path}:\n```\n{content[:2000]}\n```\n\n"
-                    file_count += 1
-                except: pass
-        if file_count == 0:
-            return "❌ Nessun file trovato"
-        status(f"✓ Letti {file_count} file", "success")
-        prompt = f"""Sei un technical writer. Genera documentazione completa per questo progetto.
+        self._reverse_log(f"reverse_start target={target}")
+        status("📖 Scansione struttura progetto...", "running")
+        candidates, stats = collect_candidate_files_with_stats(target, max_files=200)
+        self._reverse_log(f"stats_seen_files={stats.get('seen_files')}")
+        self._reverse_log(f"stats_ignored_dirs={stats.get('ignored_dirs')}")
+        self._reverse_log(f"stats_ignored_ext={stats.get('ignored_ext')}")
+        self._reverse_log(f"stats_ignored_size={stats.get('ignored_size')}")
+        self._reverse_log(f"stats_ignored_other={stats.get('ignored_other')}")
+        self._reverse_log(f"candidates={len(candidates)} truncated={stats.get('truncated')}")
 
-DOCUMENTAZIONE.md DEVE CONTENERE (IN QUESTO ORDINE):
+        candidates, policy = apply_reverse_policy(target, candidates, max_candidates=40)
+        self._reverse_log(f"policy_docs={policy.get('docs')}")
+        self._reverse_log(f"policy_source_roots={policy.get('source_roots')}")
+        self._reverse_log(f"policy_candidates_after={policy.get('candidates_after')}")
+        self._reverse_log(f"policy_excluded_tests={policy.get('excluded_tests')}")
+        self._reverse_log(f"policy_excluded_config={policy.get('excluded_config')}")
+        self._reverse_log(f"policy_limited={policy.get('limited')} limit={policy.get('limit')}")
+        if not candidates:
+            self._reverse_log("no_candidates")
+            return "❌ Nessun file rilevante trovato"
+        tree = build_tree_from_paths(
+            [rel for rel, _, _ in candidates],
+            root_name=target.name,
+            max_lines=400,
+        )
+        tree_lines = tree.count("\n") + 1 if tree else 0
+        self._reverse_log(f"tree_lines={tree_lines}")
+        index_text, allowed_set = format_candidate_index(candidates)
 
-### 1. PANORAMICA DEL PROGETTO
-- Nome del progetto
-- Scopo principale (cosa fa)
-- Linguaggi e tecnologie usate
-- Architettura generale
+        # Fase 1: chiedi al LLM quali file leggere
+        select_prompt = f"""Sei un technical writer. Ti fornisco SOLO una struttura filtrata e l'indice file.
 
-### 2. STRUTTURA DEL PROGETTO (ASCII TREE)
-Disegna diagramma ASCII della struttura file
+STRUTTURA FILTRATA:
+{tree}
 
-### 3. FILE PRINCIPALI
-Per ogni file importante:
-- **Nome file**
-- **Scopo**: cosa fa
-- **Funzioni/Classi principali**
+INDICE FILE (dimensione e tag):
+{index_text}
 
-### 4. FLUSSO DI ESECUZIONE
-Descrizione passo-passo di come esegue
+Seleziona SOLO i file necessari per capire il progetto.
+Regole:
+- Max 12 file
+- Evita log/build/temp/lock
+- Preferisci entrypoint, config, e sorgenti principali
 
-### 5. API / FUNZIONI PUBBLICHE
-Per ogni funzione pubblica:
-```
-nome_funzione(param1, param2) → return_type
-  Scopo: descrizione
-  Parametri e Returns
-```
+Rispondi SOLO con JSON:
+{{"cmd1": "READ <percorso_relativo>", "cmd2": "READ <percorso_relativo>", ...}}
+Non usare comandi shell, solo READ + path relativo."""
 
-### 6. CONFIGURAZIONE
-- File di configurazione
-- Variabili d'ambiente
-- Comandi install/run
-
-### 7. NOTE AGGIUNTIVE
-- Pattern architetturali
-- Decisioni di design
-- Limitazioni
-
-FILE DEL PROGETTO:
-{files_content}
-
-Genera DOCUMENTAZIONE.md in ITALIANO, completo e dettagliato (minimo 1000 parole).
-Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
         self._create_session()
-        self.sess.add_message("user", prompt)
-
-        # Salva opzioni originali e imposta opzioni elevate per /reverse
-        original_ctx = self.ollama.options.get("num_ctx", 8192)
-        original_predict = self.ollama.options.get("num_predict", 8192)
-        self.ollama.options["num_ctx"] = 32768
-        self.ollama.options["num_predict"] = 32768
-        status("🔧 Contesto esteso: 32768 token per /reverse", "info")
+        self.sess.add_message("user", select_prompt)
 
         try:
+            self.thinking.start()
+            select_resp = ""
+            for chunk in self.ollama.chat(self.sess.to_ollama_messages(), stream=True):
+                select_resp += chunk
+            self.thinking.stop()
+            self._reverse_log(f"select_resp_len={len(select_resp)}")
+            self._reverse_log(f"select_resp_raw={select_resp.strip()[:2000]}")
+        except Exception as e:
+            self.thinking.stop()
+            logger.exception(f"Reverse select error: {e}")
+            self._reverse_log(f"select_error={e}")
+            return f"❌ Errore selezione file: {e}"
+
+        selected_by_llm = []
+        selection_source = "llm"
+        p_sel = self.parser.parse(select_resp)
+        if p_sel.is_valid and p_sel.commands:
+            selected_by_llm = extract_requested_files(p_sel.commands, target, allowed_set, max_files=12)
+            self._reverse_log(f"select_commands={len(p_sel.commands)} selected={len(selected_by_llm)}")
+        else:
+            self._reverse_log("select_parse_failed")
+
+        # Includi sempre README/CLAUDE se presenti
+        if not selected_by_llm:
+            selection_source = "fallback"
+            selected_by_llm = pick_default_files(candidates, limit=10)
+            self._reverse_log(f"fallback_selected={len(selected_by_llm)}")
+        self._reverse_log(f"selection_source={selection_source}")
+
+        selected = list(selected_by_llm)
+        docs = find_primary_docs(target)
+        for d in docs:
+            if d not in selected:
+                selected.insert(0, d)
+
+        files_content, read_stats = read_files_content_with_stats(
+            target, selected, max_chars_per_file=4000, max_total_chars=20000
+        )
+        self._reverse_log(f"files_content_len={len(files_content)}")
+        self._reverse_log(f"files_read={read_stats.get('files_read')} total_chars={read_stats.get('total_chars')} truncated={read_stats.get('truncated')}")
+        if not files_content:
+            self._reverse_log("no_files_content")
+            return "❌ Nessun contenuto letto"
+
+        selected_list = "\n".join([f"- {p.as_posix()}" for p in selected])
+        self._reverse_log("selected_files=" + ",".join([p.as_posix() for p in selected]))
+        prompt = f"""Sei un technical writer. Genera documentazione completa per questo progetto.
+Usa SOLO i file forniti; se manca qualche informazione, dichiaralo esplicitamente.
+
+STRUTTURA FILTRATA:
+{tree}
+
+FILE SELEZIONATI:
+{selected_list}
+
+CONTENUTI FILE:
+{files_content}
+
+DOCUMENTAZIONE.md DEVE CONTENERE (IN QUESTO ORDINE):
+1) PANORAMICA DEL PROGETTO (nome, scopo, tecnologie, architettura)
+2) STRUTTURA DEL PROGETTO (ASCII tree)
+3) FILE PRINCIPALI (scopo, funzioni/classi)
+4) FLUSSO DI ESECUZIONE
+5) API / FUNZIONI PUBBLICHE
+6) CONFIGURAZIONE
+7) NOTE AGGIUNTIVE
+
+Genera DOCUMENTAZIONE.md in ITALIANO (minimo 800 parole).
+Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
+
+        # Salva opzioni originali e imposta opzioni moderate per /reverse
+        original_ctx = self.ollama.options.get("num_ctx", 8192)
+        original_predict = self.ollama.options.get("num_predict", 4096)
+        self.ollama.options["num_ctx"] = 8192
+        self.ollama.options["num_predict"] = 4096
+        status("🔧 Contesto ottimizzato: 8192/4096 token per /reverse", "info")
+        self._reverse_log(f"llm_options num_ctx=8192 num_predict=4096")
+
+        try:
+            self._create_session()
+            self.sess.add_message("user", prompt)
             self.thinking.start()
             llm = ""
             for chunk in self.ollama.chat(self.sess.to_ollama_messages(), stream=True):
                 llm += chunk
             self.thinking.stop()
+            self._reverse_log(f"final_resp_len={len(llm)}")
             p = self.parser.parse(llm)
-            
+
             # Se il JSON è troncato o incompleto, chiedi di continuare
             if not p.is_valid or (len(llm) > 10000 and llm.strip()[-10:] != 'EOF"}'):
                 status("⚠️ Response troncata, chiedo continuazione...", "warning")
+                self._reverse_log("response_truncated=True")
                 llm = self._continue_truncated_response(llm, prompt)
                 p = self.parser.parse(llm)
-            
+                self._reverse_log(f"final_resp_len_after_continue={len(llm)}")
+
             if p.is_valid and p.commands:
+                self._reverse_log(f"final_commands={len(p.commands)}")
                 self._execute_commands(p.commands)
                 doc_file = target / "DOCUMENTAZIONE.md"
                 if doc_file.exists():
@@ -964,6 +1071,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
             return llm
         except Exception as e:
             logger.exception(f"Reverse error: {e}")
+            self._reverse_log(f"reverse_error={e}")
             return f"❌ Errore: {e}"
         finally:
             # Ripristina sempre le opzioni originali
@@ -1037,7 +1145,7 @@ Importante: chiudi il JSON con }} alla fine."""
             status("📖 Reverse Engineering - Specifica il path del progetto", "running")
             parts = c.split(None, 1)
             if len(parts) > 1:
-                target_path = Path(parts[1].strip())
+                target_path = Path(_strip_surrounding_quotes(parts[1].strip()))
             else:
                 target_path = self.proj if self.proj else Path(".")
             status(f"Analizzo: {target_path.absolute()}", "info")
@@ -1083,6 +1191,12 @@ Importante: chiudi il JSON con }} alla fine."""
   {Colors.YELLOW}NOTA: claude.md è l'UNICO file di tracciamento (no README.md){Colors.RESET}
 """)
         return False
+
+def _strip_surrounding_quotes(text: str) -> str:
+    t = text.strip()
+    if len(t) >= 2 and ((t[0] == t[-1] == '"') or (t[0] == t[-1] == "'")):
+        return t[1:-1]
+    return t
 
     def run(self):
         print(f"  {Colors.DIM}Es: 'crea tris in /path/proj'{Colors.RESET}\n")
