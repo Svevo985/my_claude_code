@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ollama File System Bridge - Con logging dettagliato e fix automatico"""
 
-import argparse, json, sys, time, threading, logging, re, subprocess, hashlib
+import argparse, json, sys, time, threading, logging, re, subprocess, hashlib, shutil
 from pathlib import Path
 from typing import Optional, Tuple, List
 from datetime import datetime
@@ -394,6 +394,20 @@ class Bridge:
         lowered = {m.lower() for m in models}
         return target.lower() in lowered or target_with_tag.lower() in lowered
 
+    def _run_ollama_create(self, target_with_tag: str, modelfile_path: Path) -> tuple[bool, str]:
+        exe = shutil.which("ollama") or "ollama"
+        try:
+            result = subprocess.run(
+                [exe, "create", target_with_tag, "-f", str(modelfile_path)],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            return (result.returncode == 0, output.strip())
+        except Exception as e:
+            return (False, f"Errore: {e}")
+
     def _load_template_modelfile(self) -> Optional[str]:
         for path in [Path("Modelfile"), Path("modelfiles/Modelfile")]:
             if path.exists() and path.is_file():
@@ -454,9 +468,8 @@ class Bridge:
 
             slug = self._sanitize_model_name(model)[:120]
             temp_path = self._write_temp_modelfile(template, model, slug)
-            create_cmd = f"ollama create {target_with_tag} -f \"{self.ops.format_path_for_shell(temp_path)}\""
             status(f"Converto {model} → {target_with_tag}", "running")
-            ok, out = self.ops.execute_command(create_cmd, timeout=600)
+            ok, out = self._run_ollama_create(target_with_tag, temp_path)
             if ok:
                 status(f"Creato {target_with_tag}", "success")
                 installed.add(target_with_tag)
@@ -478,11 +491,13 @@ class Bridge:
         self._auto_convert_models()
         self.models = self.ollama.list_models()
         shell_models = self._filter_shellbot(self.models)
+        self.models = shell_models
         if shell_models:
-            self.models = shell_models
             if self.ollama.model not in shell_models:
                 self.ollama.model = shell_models[0]
                 status(f"Modello impostato su {self.ollama.model} (solo shellBot)", "info")
+        else:
+            status("Nessun modello shellBot trovato (creane uno con autoconversione)", "warning")
         status("Ollama OK", "success")
         status(f"Modello: {Colors.BOLD}{self.ollama.model}{Colors.RESET}", "info")
         if self.models:

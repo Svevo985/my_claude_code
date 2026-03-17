@@ -10,6 +10,8 @@ from pathlib import Path
 from datetime import datetime
 import time
 import re
+import subprocess
+import shutil
 
 from src.ollama_client import OllamaClient
 from src.session_manager import SessionManager
@@ -151,6 +153,20 @@ class OllamaBridgeGUI:
         lowered = {m.lower() for m in models}
         return target.lower() in lowered or target_with_tag.lower() in lowered
 
+    def _run_ollama_create(self, target_with_tag: str, modelfile_path: Path) -> tuple[bool, str]:
+        exe = shutil.which("ollama") or "ollama"
+        try:
+            result = subprocess.run(
+                [exe, "create", target_with_tag, "-f", str(modelfile_path)],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            return (result.returncode == 0, output.strip())
+        except Exception as e:
+            return (False, f"Errore: {e}")
+
     def _load_template_modelfile(self) -> str | None:
         for path in [Path("Modelfile"), Path("modelfiles/Modelfile")]:
             if path.exists() and path.is_file():
@@ -190,8 +206,7 @@ class OllamaBridgeGUI:
             # crea modelfile temporaneo
             slug = self._sanitize_model_name(model)[:120]
             tmp_path = self._write_temp_modelfile(template, model, slug)
-            create_cmd = f"ollama create {target_tag} -f \"{self.file_ops.format_path_for_shell(tmp_path)}\""
-            ok, out = self.file_ops.execute_command(create_cmd, timeout=600)
+            ok, out = self._run_ollama_create(target_tag, tmp_path)
             if ok:
                 installed.add(target_tag)
             else:
@@ -607,7 +622,7 @@ class OllamaBridgeGUI:
 
                     all_models = self.ollama.list_models()
                     shell_models = [m for m in all_models if "shellbot" in m.lower()]
-                    self.models = shell_models or all_models
+                    self.models = shell_models
                     if shell_models and self.ollama.model not in shell_models:
                         self.ollama.model = shell_models[0]
                     self.connected = True
@@ -639,7 +654,7 @@ class OllamaBridgeGUI:
                 self.models_listbox.insert(tk.END, f"{prefix}{m}")
                 self._add_message(f"  {prefix}{m}", "model_list")
         else:
-            self._add_message("⚠️ Nessun modello trovato", "warning")
+            self._add_message("⚠️ Nessun modello shellBot trovato", "warning")
 
         self.input_field.focus()
 
@@ -1330,7 +1345,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
             self._add_message("⟳ Aggiornamento modelli...", "info")
             all_models = self.ollama.list_models()
             shell_models = [m for m in all_models if "shellbot" in m.lower()]
-            self.models = shell_models or all_models
+            self.models = shell_models
             if shell_models and self.ollama.model not in shell_models:
                 self.ollama.model = shell_models[0]
             self.models_listbox.delete(0, tk.END)
@@ -1342,7 +1357,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                     self.models_listbox.insert(tk.END, f"{prefix}{m}")
                     self._add_message(f"  {prefix}{m}", "model_list")
             else:
-                self._add_message("⚠️ Nessun modello trovato", "warning")
+                self._add_message("⚠️ Nessun modello shellBot trovato", "warning")
 
     # Comandi rapidi
     def _cmd_fix(self):
