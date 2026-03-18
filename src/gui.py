@@ -204,7 +204,7 @@ class OllamaBridgeGUI:
         for path in candidates:
             if path.exists() and path.is_file():
                 try:
-                    return path.read_text()
+                    return path.read_text(encoding='utf-8', errors='replace')
                 except Exception:
                     pass
         return None
@@ -233,7 +233,7 @@ class OllamaBridgeGUI:
                 models.add(parts[0])
         return models
 
-    def _auto_convert_models(self):
+    def _auto_convert_models(self, force: bool = False):
         template = self._load_template_modelfile()
         if not template:
             return
@@ -250,7 +250,7 @@ class OllamaBridgeGUI:
             if not target:
                 continue
             target_tag = f"{target}:latest"
-            if self._target_exists(installed, target, target_tag):
+            if self._target_exists(installed, target, target_tag) and not force:
                 continue
             # crea modelfile temporaneo
             slug = self._sanitize_model_name(model)[:120]
@@ -264,7 +264,7 @@ class OllamaBridgeGUI:
 
     def _load_config(self) -> dict:
         if CONFIG_FILE.exists():
-            return json.loads(CONFIG_FILE.read_text())
+            return json.loads(CONFIG_FILE.read_text(encoding='utf-8'))
         return {
             "ollama": {
                 "base_url": "http://localhost:11434",
@@ -275,7 +275,7 @@ class OllamaBridgeGUI:
 
     def _load_state(self) -> dict:
         if STATE_FILE.exists():
-            return json.loads(STATE_FILE.read_text())
+            return json.loads(STATE_FILE.read_text(encoding='utf-8'))
         return {}
 
     def _setup_styles(self):
@@ -662,7 +662,8 @@ class OllamaBridgeGUI:
         def connect():
             try:
                 base_url = self.config.get("ollama", {}).get("base_url", "http://localhost:11434")
-                model = self.state.get('model') or self.config.get('ollama', {}).get('model', 'llama3.2')
+                use_state_model = self.config.get("ollama", {}).get("use_state_model", True)
+                model = self.state.get('model') if use_state_model and self.state.get('model') else self.config.get('ollama', {}).get('model', 'llama3.2')
                 timeout = self.config.get('ollama', {}).get('timeout', 1800)
 
                 ollama_options = {
@@ -677,7 +678,8 @@ class OllamaBridgeGUI:
 
                 if self.ollama.is_available():
                     # Autoconversione in varianti shellBot prima di filtrare
-                    self._auto_convert_models()
+                    force_rebuild = self.config.get("ollama", {}).get("force_rebuild_shellbot", False)
+                    self._auto_convert_models(force=force_rebuild)
 
                     all_models = self.ollama.list_models()
                     shell_models = [m for m in all_models if "shellbot" in m.lower()]
@@ -1038,7 +1040,7 @@ class OllamaBridgeGUI:
 
             if claude_path.exists():
                 try:
-                    content = claude_path.read_text()
+                    content = claude_path.read_text(encoding='utf-8', errors='replace')
                     self._add_message("📄 Contenuto di claude.md:", "info")
                     self._add_message("─" * 60, "system")
                     for line in content.split('\n')[:50]:  # Max 50 righe
@@ -1257,7 +1259,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                         doc_file = target / "DOCUMENTAZIONE.md"
                         if doc_file.exists():
                             self.root.after(0, lambda: self._add_message(f"📝 Documentazione salvata: {doc_file}", "success"))
-                            content = doc_file.read_text()[:1500]
+                            content = doc_file.read_text(encoding='utf-8', errors='replace')[:1500]
                             self.root.after(0, lambda c=content: self._add_message(f"\n{c}...", "code"))
                     else:
                         # fallback: salva response come doc se contiene markdown
@@ -1389,12 +1391,12 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                     # Leggi anche claude.md se esiste
                     claude_md = project_path / "claude.md"
                     if claude_md.exists():
-                        file_context += f"## claude.md:\n```\n{claude_md.read_text()[:1000]}\n```\n\n"
+                        file_context += f"## claude.md:\n```\n{claude_md.read_text(encoding='utf-8', errors='replace')[:1000]}\n```\n\n"
 
                     # Leggi file di codice
                     for f in code_files[:50 if is_reverse else 15]:  # Max 50 per reverse, 15 per fix
                         try:
-                            content = f.read_text()
+                            content = f.read_text(encoding='utf-8', errors='replace')
                             rel_path = f.relative_to(project_path) if is_reverse else f.name
                             # Per reverse: più contenuto per file (3000 chars)
                             max_chars = 3000 if is_reverse else 1500

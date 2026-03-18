@@ -3,6 +3,7 @@ Operazioni sul file system con layer di sicurezza e adattamento shell.
 """
 
 import platform
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -106,6 +107,18 @@ class FileOperations:
         """
         runner = self.shell_info.get("runner")
         timeout = timeout or self.timeout
+        cmd = (command or "").strip()
+        if not cmd:
+            return (False, "Comando vuoto")
+        if cmd.lower() in {"task completato", "completato", "done", "finished"}:
+            return (False, "Comando di stato non eseguibile")
+        if runner == "powershell":
+            cmd = re.sub(r"-Value\s+@'([^\r\n]*)'@", lambda m: "-Value '" + m.group(1).replace("'", "''") + "'", cmd)
+            if "@'" in cmd:
+                if not re.search(r"@'\s*\r?\n", cmd):
+                    return (False, "Here-string @' deve essere seguito da newline")
+                if not re.search(r"(?m)^'@\s*$", cmd):
+                    return (False, "Here-string terminator ('@) mancante o non su riga singola")
 
         try:
             if runner == "wsl":

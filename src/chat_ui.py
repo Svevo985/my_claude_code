@@ -124,7 +124,8 @@ class ChatApp(App):
     def _init_ollama(self):
         """Inizializza il client Ollama."""
         try:
-            model = self.state.get('model') or self.config.get('ollama', {}).get('model', 'llama3.2')
+            use_state_model = self.config.get("ollama", {}).get("use_state_model", True)
+            model = self.state.get('model') if use_state_model and self.state.get('model') else self.config.get('ollama', {}).get('model', 'llama3.2')
             base_url = self.config.get('ollama', {}).get('base_url', 'http://localhost:11434')
             timeout = self.config.get('ollama', {}).get('timeout', 1800)
             
@@ -261,7 +262,7 @@ class ChatApp(App):
 def load_config() -> dict:
     """Carica la configurazione."""
     if CONFIG_FILE.exists():
-        return json.loads(CONFIG_FILE.read_text())
+        return json.loads(CONFIG_FILE.read_text(encoding='utf-8'))
     return {
         "ollama": {
             "base_url": "http://localhost:11434",
@@ -274,7 +275,7 @@ def load_config() -> dict:
 def load_state() -> dict:
     """Carica lo stato."""
     if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
+        return json.loads(STATE_FILE.read_text(encoding='utf-8'))
     return {}
 
 

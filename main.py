@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ollama File System Bridge - Con logging dettagliato e fix automatico"""
 
-import argparse, json, sys, time, threading, logging, re, subprocess, hashlib, shutil
+import argparse, json, sys, time, threading, logging, re, subprocess, hashlib, shutil, os
 from pathlib import Path
 from typing import Optional, Tuple, List
 from datetime import datetime
@@ -29,6 +29,14 @@ STATE_FILE = Path("./.ollama_bridge_state.json")
 COMMAND_HISTORY = []
 HISTORY_FILE = Path.home() / ".ollama_bridge_history"
 REVERSE_LOG = LOG_DIR / "reverse_cli.log"
+
+def _ensure_utf8_stdio():
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 def load_history():
     if HISTORY_FILE.exists():
@@ -64,13 +72,14 @@ def log_request_response(session_id: str, request: dict, response: dict = None, 
 
     ts = datetime.now().strftime('%H:%M:%S')
     if response:
-        logger.info(f"[{ts}] REQUEST → {len(json.dumps(request))} chars")
-        logger.info(f"[{ts}] RESPONSE ← {len(json.dumps(response))} chars")
+        logger.info(f"[{ts}] REQUEST -> {len(json.dumps(request))} chars")
+        logger.info(f"[{ts}] RESPONSE <- {len(json.dumps(response))} chars")
     elif error:
         logger.error(f"[{ts}] ERROR: {error}")
 
+_ensure_utf8_stdio()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler(LOG_DIR / f"ollama_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"), logging.StreamHandler(sys.stdout)])
+    handlers=[logging.FileHandler(LOG_DIR / f"ollama_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log", encoding='utf-8'), logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
 
 class Colors:
@@ -131,7 +140,7 @@ class ClaudeContext:
     def load(self) -> bool:
         if not self.f.exists(): return False
         try:
-            self._c = self.f.read_text()
+            self._c = self.f.read_text(encoding='utf-8', errors='replace')
             return True
         except Exception as e: logger.error(f"Errore load CLAUDE.md: {e}"); return False
     def get(self) -> str: return self._c
@@ -143,7 +152,6 @@ class ClaudeContext:
 
 class Tester:
     RUNNERS = {
-        '.py': lambda f: f"python3 {f}",
         '.js': lambda f: f"node {f}",
         '.sh': lambda f: f"bash {f}",
         '.java': lambda f: f"cd {f.parent} && javac {f.name} && java {f.stem}"
@@ -165,6 +173,9 @@ class Tester:
         if not f: return False, "", "Nessun file .py/.js/.sh/.java/.class"
         if f.suffix.lower() == '.class':
             cmd = f"cd {f.parent} && java {f.stem}"
+        elif f.suffix.lower() == '.py':
+            py = sys.executable or "python"
+            cmd = f"\"{py}\" \"{f}\""
         else:
             cmd = self.RUNNERS.get(f.suffix.lower(), lambda x: None)(f)
         if not cmd: return True, "Non eseguibile", ""
@@ -181,11 +192,11 @@ class State:
     def _load(self):
         if not self.f.exists(): return
         try:
-            d = json.loads(self.f.read_text())
+            d = json.loads(self.f.read_text(encoding='utf-8'))
             self.model = d.get('model'); self.auto_c = d.get('auto_c', True); self.auto_t = d.get('auto_t', True); self.safe = d.get('safe', True)
         except: pass
     def save(self):
-        try: self.f.write_text(json.dumps({'model': self.model, 'auto_c': self.auto_c, 'auto_t': self.auto_t, 'safe': self.safe}, indent=2))
+        try: self.f.write_text(json.dumps({'model': self.model, 'auto_c': self.auto_c, 'auto_t': self.auto_t, 'safe': self.safe}, indent=2), encoding='utf-8')
         except: pass
 
 def get_input() -> str:
@@ -263,10 +274,12 @@ def fix_project_files(proj_dir: Path) -> int:
 class Bridge:
     def __init__(self, cfg: dict, st: State, forced_model: str = None):
         self.cfg, self.st = cfg, st
+        use_state_model = cfg.get("ollama", {}).get("use_state_model", True)
         model_to_use = (
             forced_model if forced_model
-            else (st.model if st.model else cfg["ollama"]["model"])
+            else (st.model if use_state_model and st.model else cfg["ollama"]["model"])
         )
+        self.use_state_model = use_state_model
 
         ollama_options = {
             # ── Sampling ────────────────────────────────────────────────────
@@ -322,7 +335,7 @@ class Bridge:
             status("📖 Modalità REVERSE attivata", "success")
 
     def _log(self, t, d): self.logs.append({"ts": datetime.now().isoformat(), "t": t, "d": d})
-    def _save_logs(self): self.log_f.write_text(json.dumps(self.logs, indent=2, ensure_ascii=False))
+    def _save_logs(self): self.log_f.write_text(json.dumps(self.logs, indent=2, ensure_ascii=False), encoding='utf-8')
     def _find_model(self, n) -> Optional[str]:
         nl = n.lower()
         for m in self.models:
@@ -452,7 +465,7 @@ class Bridge:
         for path in candidates:
             if path.exists() and path.is_file():
                 try:
-                    return path.read_text()
+                    return path.read_text(encoding='utf-8', errors='replace')
                 except Exception as e:
                     logger.error(f"Errore lettura {path}: {e}")
         return None
@@ -485,7 +498,7 @@ class Bridge:
             status(f"ollama list fallito: {out}", "warning")
         return models
 
-    def _auto_convert_models(self):
+    def _auto_convert_models(self, force: bool = False):
         template = self._load_template_modelfile()
         if not template:
             status("Nessun Modelfile trovato per conversione automatica", "warning")
@@ -504,7 +517,7 @@ class Bridge:
             if not target:
                 continue
             target_with_tag = f"{target}:latest"
-            if self._target_exists(installed, target, target_with_tag):
+            if self._target_exists(installed, target, target_with_tag) and not force:
                 continue
 
             slug = self._sanitize_model_name(model)[:120]
@@ -523,13 +536,24 @@ class Bridge:
             status("Nessuna conversione necessaria", "info")
         else:
             status(f"Conversioni completate: {conversions}", "success")
+
+    def rebuild_shellbot_models(self):
+        status("Rigenerazione shellBot in corso...", "running")
+        self._auto_convert_models(force=True)
+        self.models = self._filter_shellbot(self.ollama.list_models())
     def init(self) -> bool:
         banner()
         self._show_environment()
+        cfg_model = self.cfg.get("ollama", {}).get("model")
+        if cfg_model:
+            status(f"Model config: {cfg_model}", "info")
+        if self.use_state_model and self.st.model:
+            status(f"Model state: {self.st.model}", "info")
         status("Ollama...", "running")
         if not self.ollama.is_available():
             status("Ollama OFF!", "error"); print(f"  {Colors.DIM}$ ollama serve{Colors.RESET}\n"); return False
-        self._auto_convert_models()
+        force_rebuild = self.cfg.get("ollama", {}).get("force_rebuild_shellbot", False)
+        self._auto_convert_models(force=force_rebuild)
         self.models = self.ollama.list_models()
         shell_models = self._filter_shellbot(self.models)
         self.models = shell_models
@@ -551,7 +575,7 @@ class Bridge:
         self._create_session()
         status(f"Sessione: {self.sess.id}", "success")
         print(f"  {Colors.DIM}═══════════════════════════════════════════════════════════{Colors.RESET}")
-        print(f"  {Colors.GRAY}Comandi: /help /fix /new /reverse /model /safe /auto /test /context /exit{Colors.RESET}")
+        print(f"  {Colors.GRAY}Comandi: /help /fix /new /reverse /model /rebuild /safe /auto /test /context /exit{Colors.RESET}")
         print(f"  {Colors.DIM}═══════════════════════════════════════════════════════════{Colors.RESET}\n")
         return True
 
@@ -560,6 +584,31 @@ class Bridge:
         if not m: status(f"'{n}' non trovato", "error"); return False
         self.ollama.model = m; self.st.model = m; self.st.save()
         status(f"Modello: {Colors.BOLD}{m}{Colors.RESET}", "success"); return True
+
+    def _sanitize_powershell_command(self, cmd: str) -> str:
+        if self.command_style != "powershell":
+            return cmd
+        # Fix comune: terminatore here-string con punteggiatura ('@. -> '@)
+        cmd = re.sub(r"(?m)^'@\s*[\.,;:]+\s*$", "'@", cmd)
+        # Fix comune: here-string inline su singola riga -> stringa singola
+        def _inline_fix(m):
+            content = m.group(1)
+            return "-Value '" + content.replace("'", "''") + "'"
+        cmd = re.sub(r"-Value\s+@'([^\r\n]*)'@", _inline_fix, cmd)
+        return cmd
+
+    def _validate_powershell_heredoc(self, cmd: str) -> tuple[bool, str]:
+        if self.command_style != "powershell":
+            return (True, "OK")
+        if "@'" not in cmd:
+            return (True, "OK")
+        # Start deve essere seguito da newline
+        if not re.search(r"@'\s*\r?\n", cmd):
+            return (False, "Here-string @' deve essere seguito da newline")
+        # Terminatore su riga singola
+        if not re.search(r"(?m)^'@\s*$", cmd):
+            return (False, "Here-string terminator ('@) mancante o non su riga singola")
+        return (True, "OK")
 
     def _execute_commands(self, commands: List[str]) -> Tuple[int, List[Tuple[int, str, str]]]:
         success_count = 0
@@ -571,9 +620,20 @@ class Bridge:
             if create_readme:
                 status("⛔ Saltato: README.md non creato (usa solo claude.md)", "warning")
                 continue
+            if not cmd or not cmd.strip():
+                continue
+            if cmd.strip().lower() in {"task completato", "completato", "done", "finished"}:
+                status("? Saltato: comando di stato non eseguibile", "warning")
+                continue
             
             filtered_commands.append(cmd)
         for i, cmd in enumerate(filtered_commands, 1):
+            cmd = self._sanitize_powershell_command(cmd)
+            ok_heredoc, heredoc_err = self._validate_powershell_heredoc(cmd)
+            if not ok_heredoc:
+                status(f"? Comando {i} non valido: {heredoc_err}", "error")
+                failures.append((i, cmd, heredoc_err))
+                continue
             cmd_box(cmd, i)
             ok, out = self.ops.execute_command(cmd)
             if ok:
@@ -584,7 +644,7 @@ class Bridge:
                 status(f"✗ Comando {i} fallito: {out}", "error")
                 failures.append((i, cmd, out))
         self._commands_executed = success_count > 0
-        if success_count > 0 and self.proj:
+        if success_count > 0 and self.proj and self.mode in {"new", "fix"}:
             fixed = fix_project_files(self.proj)
             if fixed > 0:
                 status(f"🔧 Fixati {fixed} file", "success")
@@ -609,7 +669,7 @@ class Bridge:
             current_content = ""
             test_file = self.tester.find()
             if test_file and test_file.exists():
-                current_content = test_file.read_text()
+                current_content = test_file.read_text(encoding='utf-8', errors='replace')
             prompt = f"""Il file ha errori di sintassi Python:
 
 ERRORE: {e or o}
@@ -657,14 +717,14 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
         claude_content = ""
         if claude_md.exists():
             try:
-                claude_content = f"## claude.md (storico fix):\n```\n{claude_md.read_text()[:800]}\n```\n\n"
+                claude_content = f"## claude.md (storico fix):\n```\n{claude_md.read_text(encoding='utf-8', errors='replace')[:800]}\n```\n\n"
             except:
                 pass
         context = "## File esistenti nel progetto (LEGGERE PRIMA DI FIXARE):\n\n"
         context += claude_content
         for f in code_files[:max_files]:
             try:
-                content = f.read_text()
+                content = f.read_text(encoding='utf-8', errors='replace')
                 if len(content) > 800:
                     content = content[:800] + "\n... (troncato - file lungo)"
                 context += f"### {f.name}:\n```\n{content}\n```\n\n"
@@ -689,6 +749,10 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
             logger.error(f"Errore update claude.md: {e}")
 
     def _done(self, t) -> bool:
+        if not t:
+            return False
+        if self.parser.CMD_START_PATTERN.search(t):
+            return False
         return any(p in t.lower() for p in ["task completato","completato","fatto","completed","finished","done"])
 
     def chat(self, u) -> str:
@@ -860,7 +924,7 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                     else:
                         status(f"Tutti eseguiti", "success")
                         self._failed_commands = []
-                        if self.proj and self.proj.exists():
+                        if self.proj and self.proj.exists() and self.mode in {"new", "fix"}:
                             self._update_claude_md_fix(u)
                         
                         # Per /new: chiedi se ci sono altri file da creare
@@ -1067,7 +1131,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                 self._execute_commands(p.commands)
                 doc_file = target / "DOCUMENTAZIONE.md"
                 if doc_file.exists():
-                    return doc_file.read_text()[:3000]
+                    return doc_file.read_text(encoding='utf-8', errors='replace')[:3000]
             return llm
         except Exception as e:
             logger.exception(f"Reverse error: {e}")
@@ -1120,6 +1184,8 @@ Importante: chiudi il JSON con }} alla fine."""
             self.st.save()
             print(f"\n  {Colors.GREEN}✓{Colors.RESET}\n"); return True
         if cmd == '/model' and len(p) > 1: self.change_model(c.split(None,1)[1])
+        elif cmd == '/rebuild':
+            self.rebuild_shellbot_models()
         elif cmd == '/safe':
             self.st.safe = not self.st.safe; self.st.save()
             status(f"Safety: {'ON' if self.st.safe else 'OFF'}", "info")
@@ -1153,7 +1219,7 @@ Importante: chiudi il JSON con }} alla fine."""
             if doc and not doc.startswith("❌"):
                 doc_file = target_path / "DOCUMENTAZIONE.md"
                 try:
-                    doc_file.write_text(doc)
+                    doc_file.write_text(doc, encoding='utf-8')
                     status(f"📝 Documentazione salvata: {doc_file}", "success")
                     print(f"\n  {Colors.CYAN}{doc[:1000]}{'...' if len(doc) > 1000 else ''}{Colors.RESET}\n")
                 except Exception as e:
@@ -1174,6 +1240,7 @@ Importante: chiudi il JSON con }} alla fine."""
 
   {Colors.BOLD}Gestione:{Colors.RESET}
     {Colors.GREEN}/model <nome>{Colors.RESET}  Cambia modello LLM
+    {Colors.GREEN}/rebuild{Colors.RESET}     Rigenera modelli shellBot da Modelfile
     {Colors.GREEN}/safe{Colors.RESET}        Toggle safety (ON/OFF)
     {Colors.GREEN}/auto{Colors.RESET}        Auto-continue (ON/OFF)
     {Colors.GREEN}/test{Colors.RESET}        Auto-test dopo fix (ON/OFF)
@@ -1238,6 +1305,7 @@ Esempi:
     ap.add_argument("--gui", action="store_true", help="Avvia interfaccia grafica (Tkinter)")
     ap.add_argument("--chat", action="store_true", help="Avvia chat UI testuale (Textual)")
     ap.add_argument("--cli", action="store_true", help="Forza modalità CLI terminale (default)")
+    ap.add_argument("--rebuild-shellbot", action="store_true", help="Rigenera i modelli shellBot da Modelfile")
     args = ap.parse_args()
 
     if args.gui:
@@ -1251,10 +1319,13 @@ Esempi:
         return
 
     st = State(STATE_FILE)
-    cfg = json.loads(Path(args.config).read_text()) if Path(args.config).exists() else {"ollama":{"base_url":"http://localhost:11434","model":"shellbot:latest","timeout":1800}}
+    cfg = json.loads(Path(args.config).read_text(encoding='utf-8')) if Path(args.config).exists() else {"ollama":{"base_url":"http://localhost:11434","model":"shellbot:latest","timeout":1800}}
     forced_model = args.model if args.model else None
     b = Bridge(cfg, st, forced_model)
     if not b.init(): sys.exit(1)
+    if args.rebuild_shellbot:
+        b.rebuild_shellbot_models()
+        return
     print(b.chat(args.prompt)) if args.prompt else b.run()
 
 if __name__ == "__main__": main()

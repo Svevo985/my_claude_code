@@ -42,8 +42,12 @@ POWERSHELL FILE SYNTAX - CRITICAL:
   <content>
 '@
 - The @' must be on its own line and the closing '@ must be on its own line
+- The line with @' must end immediately after @' (no trailing chars)
+- The line with '@ must contain ONLY '@ (no punctuation, no trailing chars)
+- Never end a command with punctuation after the closing '@
 - NEVER use cat << 'EOF' or bash heredoc
 - NEVER use echo for multi-line content
+- Never output "Task completato" as a cmd value
 
 =============================================================================
 README.md STRUCTURE - MANDATORY FORMAT:
