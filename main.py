@@ -1007,6 +1007,41 @@ JSON:"""
         index_text, allowed_set = format_candidate_index(candidates)
 
         # Fase 1: chiedi al LLM quali file leggere
+        # Rileva se è un progetto Java PRIMA della selezione
+        # Cerca pom.xml/build.gradle tra i candidati originali (non filtrati)
+        has_java_files = any(
+            item[0].suffix.lower() == ".java"
+            for item in candidates
+        )
+        # Controlla pom.xml/build.gradle nella root del progetto
+        has_build_file = (target / "pom.xml").exists() or (target / "build.gradle").exists() or (target / "settings.gradle").exists()
+        is_java_project = has_java_files and has_build_file
+        
+        # Debug logging
+        status(f"🔍 Debug Java: has_java={has_java_files}, has_build={has_build_file}, is_java={is_java_project}", "info")
+        
+        # Cerca classi Service manualmente per debug
+        service_files = [item[0] for item in candidates if item[0].stem.endswith("Service") and item[0].suffix.lower() == ".java"]
+        if service_files:
+            status(f"📦 Trovate {len(service_files)} classi Service nei candidati", "success")
+            for sf in service_files[:5]:
+                status(f"   - {sf.as_posix()}", "info")
+        else:
+            status("⚠️ Nessuna classe Service trovata nei candidati!", "warning")
+        
+        java_instruction = ""
+        if is_java_project:
+            java_instruction = """
+⚠️ PROGETTO JAVA MICROSERVIZIO - REGOLE SPECIALI:
+- PRIORITÀ 1: Leggi TUTTE le classi *Service.java (contengono la logica di business)
+- PRIORITÀ 2: Leggi le classi *Controller.java (API endpoint) e la classe Application principale
+- PRIORITÀ 3: Leggi *Repository.java e DTO solo se necessario per contesto
+- Concentrati sulla logica di business nei Service layer
+- Per ogni Service: documenta metodi pubblici, dipendenze iniettate, chiamate esterne (DB, API)
+- Identifica i use case implementati da ogni Service
+- Mappa il flusso: Controller -> Service -> Repository
+"""
+        
         select_prompt = f"""Sei un technical writer. Ti fornisco SOLO una struttura filtrata e l'indice file.
 
 STRUTTURA FILTRATA:
@@ -1014,7 +1049,7 @@ STRUTTURA FILTRATA:
 
 INDICE FILE (dimensione e tag):
 {index_text}
-
+{java_instruction}
 Seleziona SOLO i file necessari per capire il progetto.
 Regole:
 - Max 12 file
@@ -1051,6 +1086,14 @@ Non usare comandi shell, solo READ + path relativo."""
         else:
             self._reverse_log("select_parse_failed")
 
+        # Per progetti Java: includi SEMPRE le classi Service (priorità massima)
+        java_services = []
+        if is_java_project:
+            java_services = find_java_service_classes(candidates)
+            if java_services:
+                self._reverse_log(f"java_services_found={len(java_services)}")
+                status(f"📦 Trovate {len(java_services)} classi Service Java", "info")
+
         # Includi sempre README/CLAUDE se presenti
         if not selected_by_llm:
             selection_source = "fallback"
@@ -1058,7 +1101,18 @@ Non usare comandi shell, solo READ + path relativo."""
             self._reverse_log(f"fallback_selected={len(selected_by_llm)}")
         self._reverse_log(f"selection_source={selection_source}")
 
+        # Costruisci lista finale: PRIMA le Service, poi le altre selezionate
         selected = list(selected_by_llm)
+        for svc in java_services:
+            if svc not in selected:
+                selected.insert(0, svc)  # Inserisci Service all'inizio
+        
+        # Aggiungi anche i Controller se sono Java project
+        java_controllers = find_java_controller_classes(candidates)
+        for ctrl in java_controllers:
+            if ctrl not in selected and len(selected) < 15:
+                selected.append(ctrl)
+        
         docs = find_primary_docs(target)
         for d in docs:
             if d not in selected:
@@ -1075,9 +1129,24 @@ Non usare comandi shell, solo READ + path relativo."""
 
         selected_list = "\n".join([f"- {p.as_posix()}" for p in selected])
         self._reverse_log("selected_files=" + ",".join([p.as_posix() for p in selected]))
+        
+        # Rileva se è un progetto Java per istruzioni specifiche
+        java_doc_instruction = ""
+        if is_java_project:
+            java_doc_instruction = """
+⚠️ PROGETTO JAVA MICROSERVIZIO - ISTRUZIONI SPECIALI:
+- Concentrati sulle classi Service: descrivi la logica di business di ogni metodo pubblico
+- Per ogni Service: elenca le dipendenze iniettate (@Autowired, constructor injection)
+- Documenta le chiamate esterne: database (Repository), API esterne (RestTemplate, WebClient)
+- Spiega il flusso: Controller riceve richiesta -> Service elabora -> Repository persiste
+- Identifica i use case/business capability implementati
+- Se presenti, documenta: DTO, Exception Handler, Config classes
+- Per API REST: indica endpoint HTTP, request/response format
+"""
+        
         prompt = f"""Sei un technical writer. Genera documentazione completa per questo progetto.
 Usa SOLO i file forniti; se manca qualche informazione, dichiaralo esplicitamente.
-
+{java_doc_instruction}
 STRUTTURA FILTRATA:
 {tree}
 

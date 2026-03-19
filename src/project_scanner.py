@@ -232,9 +232,80 @@ def apply_reverse_policy(
     return filtered, info
 
 
-def _candidate_score(item: Tuple[Path, int, Set[str]]) -> int:
-    _, _, tags = item
+def _is_java_service_file(rel: Path) -> bool:
+    """Check if file is a Java Service class (ends with Service.java)."""
+    return rel.suffix.lower() == ".java" and rel.stem.endswith("Service")
+
+
+def _is_java_controller_file(rel: Path) -> bool:
+    """Check if file is a Java Controller class."""
+    return rel.suffix.lower() == ".java" and rel.stem.endswith("Controller")
+
+
+def _is_java_repository_file(rel: Path) -> bool:
+    """Check if file is a Java Repository/DAO class."""
+    stem = rel.stem.lower()
+    return rel.suffix.lower() == ".java" and (stem.endswith("repository") or stem.endswith("dao") or stem.endswith("mapper"))
+
+
+def _is_java_dto_file(rel: Path) -> bool:
+    """Check if file is a Java DTO/Request/Response class."""
+    stem = rel.stem.lower()
+    return rel.suffix.lower() == ".java" and (stem.endswith("dto") or stem.endswith("request") or stem.endswith("response") or stem.endswith("vo"))
+
+
+def _is_java_config_file(rel: Path) -> bool:
+    """Check if file is a Java Spring config class."""
+    return rel.suffix.lower() == ".java" and (rel.stem.endswith("Config") or rel.stem.endswith("Configuration") or rel.stem.endswith("Application"))
+
+
+def _is_java_project(candidates: List[Tuple[Path, int, Set[str]]]) -> bool:
+    """Detect if project is a Java project (has .java files and pom.xml/build.gradle)."""
+    has_java = any(item[0].suffix.lower() == ".java" for item in candidates)
+    has_build = any(item[0].name.lower() in {"pom.xml", "build.gradle", "settings.gradle"} for item in candidates)
+    return has_java and has_build
+
+
+def find_java_service_classes(
+    candidates: List[Tuple[Path, int, Set[str]]]
+) -> List[Path]:
+    """Find all Java Service classes in the candidate list."""
+    services = []
+    for rel, _, _ in candidates:
+        if _is_java_service_file(rel):
+            services.append(rel)
+    return sorted(services, key=lambda p: p.as_posix())
+
+
+def find_java_controller_classes(
+    candidates: List[Tuple[Path, int, Set[str]]]
+) -> List[Path]:
+    """Find all Java Controller classes in the candidate list."""
+    controllers = []
+    for rel, _, _ in candidates:
+        if _is_java_controller_file(rel):
+            controllers.append(rel)
+    return sorted(controllers, key=lambda p: p.as_posix())
+
+
+def _candidate_score(item: Tuple[Path, int, Set[str]], is_java_project: bool = False) -> int:
+    _, rel, tags = item[0], item[0], item[2]
     score = 0
+    
+    # Java microservice pattern: prioritize Service classes
+    if is_java_project:
+        if _is_java_service_file(rel):
+            score += 10  # Highest priority - business logic
+        elif _is_java_controller_file(rel):
+            score += 8   # API endpoints
+        elif _is_java_config_file(rel):
+            score += 6   # Configuration
+        elif _is_java_repository_file(rel):
+            score += 4   # Data access
+        elif _is_java_dto_file(rel):
+            score += 2   # Data transfer objects
+    
+    # Generic scoring
     if "entry" in tags:
         score += 4
     if "config" in tags:
@@ -250,7 +321,8 @@ def _top_ranked_candidates(
     candidates: List[Tuple[Path, int, Set[str]]],
     limit: int
 ) -> List[Tuple[Path, int, Set[str]]]:
-    ranked = sorted(candidates, key=lambda x: (-_candidate_score(x), x[0].as_posix()))
+    is_java = _is_java_project(candidates)
+    ranked = sorted(candidates, key=lambda x: (-_candidate_score(x, is_java), x[0].as_posix()))
     return ranked[:limit]
 
 
@@ -489,21 +561,13 @@ def pick_default_files(
     candidates: List[Tuple[Path, int, Set[str]]],
     limit: int = 10
 ) -> List[Path]:
+    is_java = _is_java_project(candidates)
+    
     # Priorita: entry + config + source, poi doc
     def score(item: Tuple[Path, int, Set[str]]) -> int:
-        _, _, tags = item
-        s = 0
-        if "entry" in tags:
-            s += 4
-        if "config" in tags:
-            s += 3
-        if "source" in tags:
-            s += 2
-        if "doc" in tags:
-            s += 1
-        return -s
+        return _candidate_score(item, is_java)
 
-    ranked = sorted(candidates, key=score)
+    ranked = sorted(candidates, key=lambda x: (-score(x), x[0].as_posix()))
     return [r[0] for r in ranked[:limit]]
 
 

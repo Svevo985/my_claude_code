@@ -29,6 +29,8 @@ from src.project_scanner import (
     extract_requested_files,
     read_files_content,
     read_files_content_with_stats,
+    find_java_service_classes,
+    find_java_controller_classes,
 )
 
 CONFIG_FILE = Path("./config.json")
@@ -1115,6 +1117,25 @@ class OllamaBridgeGUI:
                 self._reverse_log(f"tree_lines={tree.count(chr(10)) + 1 if tree else 0}")
                 index_text, allowed_set = format_candidate_index(candidates)
 
+                # Rileva se è un progetto Java PRIMA della selezione
+                # Controlla se esistono file .java e pom.xml/build.gradle nella root
+                has_java_files = any(
+                    item[0].suffix.lower() == ".java"
+                    for item in candidates
+                )
+                has_build_file = (target / "pom.xml").exists() or (target / "build.gradle").exists() or (target / "settings.gradle").exists()
+                is_java_project = has_java_files and has_build_file
+                
+                java_instruction = ""
+                if is_java_project:
+                    java_instruction = """
+⚠️ PROGETTO JAVA MICROSERVIZIO - REGOLE SPECIALI:
+- PRIORITÀ 1: Leggi TUTTE le classi *Service.java (contengono la logica di business)
+- PRIORITÀ 2: Leggi le classi *Controller.java (API endpoint) e la classe Application principale
+- PRIORITÀ 3: Leggi *Repository.java e DTO solo se necessario per contesto
+- Concentrati sulla logica di business nei Service layer
+"""
+
                 # Fase 1: selezione file da leggere
                 select_prompt = f"""Sei un technical writer. Ti fornisco SOLO una struttura filtrata e l'indice file.
 
@@ -1123,7 +1144,7 @@ STRUTTURA FILTRATA:
 
 INDICE FILE (dimensione e tag):
 {index_text}
-
+{java_instruction}
 Seleziona SOLO i file necessari per capire il progetto.
 Regole:
 - Max 12 file
@@ -1153,12 +1174,33 @@ Non usare comandi shell, solo READ + path relativo."""
                     self._reverse_log(f"select_commands={len(p_sel.commands)} selected={len(selected_by_llm)}")
                 else:
                     self._reverse_log("select_parse_failed")
+                    
+                # Per progetti Java: includi SEMPRE le classi Service (priorità massima)
+                java_services = []
+                if is_java_project:
+                    java_services = find_java_service_classes(candidates)
+                    if java_services:
+                        self._reverse_log(f"java_services_found={len(java_services)}")
+                        self.root.after(0, lambda n=len(java_services):
+                            self._add_message(f"📦 Trovate {n} classi Service Java", "info")
+                        )
+
                 if not selected_by_llm:
                     selection_source = "fallback"
                     selected_by_llm = pick_default_files(candidates, limit=10)
                     self._reverse_log(f"fallback_selected={len(selected_by_llm)}")
 
+                # Costruisci lista finale: PRIMA le Service, poi le altre selezionate
                 selected = list(selected_by_llm)
+                for svc in java_services:
+                    if svc not in selected:
+                        selected.insert(0, svc)  # Inserisci Service all'inizio
+                
+                # Aggiungi anche i Controller se sono Java project
+                java_controllers = find_java_controller_classes(candidates)
+                for ctrl in java_controllers:
+                    if ctrl not in selected and len(selected) < 15:
+                        selected.append(ctrl)
 
                 # Includi sempre README/CLAUDE se presenti (aggiunti dal bridge)
                 docs = find_primary_docs(target)
@@ -1202,9 +1244,20 @@ Non usare comandi shell, solo READ + path relativo."""
                 self.ollama.options['num_predict'] = 4096
                 self._reverse_log("llm_options num_ctx=8192 num_predict=4096")
 
+                java_doc_instruction = ""
+                if is_java_project:
+                    java_doc_instruction = """
+⚠️ PROGETTO JAVA MICROSERVIZIO - ISTRUZIONI SPECIALI:
+- Concentrati sulle classi Service: descrivi la logica di business di ogni metodo pubblico
+- Per ogni Service: elenca le dipendenze iniettate (@Autowired, constructor injection)
+- Documenta le chiamate esterne: database (Repository), API esterne (RestTemplate, WebClient)
+- Spiega il flusso: Controller riceve richiesta -> Service elabora -> Repository persiste
+- Identifica i use case/business capability implementati
+"""
+
                 prompt = f"""Sei un technical writer esperto. Genera documentazione COMPLETA per questo progetto.
 Usa SOLO i file forniti; se manca qualche informazione, dichiaralo.
-
+{java_doc_instruction}
 STRUTTURA FILTRATA:
 {tree}
 

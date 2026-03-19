@@ -24,9 +24,11 @@ class CommandParser:
 
         # 0. RIMUOVI thinking tags (<think>...</think>) - alcuni modelli li usano
         response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL | re.IGNORECASE)
-        response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL | re.IGNORECASE)
 
-        # 1. PRIORITA': cerca JSON dentro code block markdown
+        # 0b. RIMUOVI fence markdown di apertura (```json o ```)
+        response = re.sub(r'^```(?:json)?\s*\n?', '', response, flags=re.IGNORECASE).strip()
+
+        # 1. PRIORITA': cerca JSON dentro code block markdown (con chiusura ```)
         block_matches = self.JSON_BLOCK_PATTERN.findall(response)
         if block_matches:
             return self._try_parse_json(block_matches[0], response)
@@ -39,7 +41,6 @@ class CommandParser:
             json_str = self._extract_balanced_json(potential_json)
             if json_str:
                 return self._try_parse_json(json_str, original_response)
-            # Se non estrae bilanciato, prova comunque a parsare
             return self._try_parse_json(potential_json, original_response)
 
         # 3. Se la response INIZIA con { (anche senza cmd), prova a estrarre
@@ -54,7 +55,7 @@ class CommandParser:
             raw_response=original_response,
             is_valid=False,
             error="Nessun comando JSON trovato"
-        )
+    )
 
     def _extract_balanced_json(self, text: str) -> str:
         """Estrae JSON bilanciato contando parentesi graffe."""
