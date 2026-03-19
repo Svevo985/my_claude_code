@@ -274,12 +274,20 @@ def fix_project_files(proj_dir: Path) -> int:
 class Bridge:
     def __init__(self, cfg: dict, st: State, forced_model: str = None):
         self.cfg, self.st = cfg, st
-        use_state_model = cfg.get("ollama", {}).get("use_state_model", True)
-        model_to_use = (
+        self.use_state_model = cfg.get("ollama", {}).get("use_state_model", True)
+        
+        # Modello di base (quello selezionato dall'utente o di default)
+        base_model = (
             forced_model if forced_model
-            else (st.model if use_state_model and st.model else cfg["ollama"]["model"])
+            else (st.model if self.use_state_model and st.model else cfg["ollama"]["model"])
         )
-        self.use_state_model = use_state_model
+        
+        # Modelli specializzati shellbot
+        self.model_create = "phi4-mini-shellbot-create:latest"  # Per /new e /fix
+        self.model_docs = "phi4-mini-shellbot-docs:latest"      # Per /reverse
+        
+        # Modello iniziale (verrà cambiato in base alla modalità)
+        model_to_use = base_model
 
         ollama_options = {
             # ── Sampling ────────────────────────────────────────────────────
@@ -292,7 +300,7 @@ class Bridge:
             # ── Memoria GPU (RX 5700 XT 8GB) ────────────────────────────────
             "num_ctx": 8192,
             "num_batch": 512,
-            "num_predict": -1,  # SENZA LIMITE: lascia lavorare LLM finché ha finito
+            "num_predict": 2048,  # LIMITE per evitare generazioni infinite
             "num_thread": 8,
         }
 
@@ -327,6 +335,17 @@ class Bridge:
 
     def set_mode(self, m: str):
         self.mode = m
+        # Cambia modello in base alla modalità
+        if m in ('fix', 'new'):
+            if self.ollama.model != self.model_create:
+                self.ollama.model = self.model_create
+                status(f"🔄 Modello: {self.model_create} (CREATE/FIX)", "info")
+        elif m == 'reverse':
+            if self.ollama.model != self.model_docs:
+                self.ollama.model = self.model_docs
+                status(f"🔄 Modello: {self.model_docs} (DOCS/REVERSE)", "info")
+        
+        # Messaggio di conferma modalità
         if m == 'fix':
             status("🔧 Modalità FIX attivata", "success")
         elif m == 'new':
@@ -383,7 +402,7 @@ class Bridge:
         return f"Ambiente host: {system} (bash). Usa comandi POSIX standard."
 
     def _filter_shellbot(self, models: list[str]) -> list[str]:
-        """Ritorna solo i modelli shellbot."""
+        """Ritorna solo i modelli shellbot (inclusi quelli specializzati)."""
         return [m for m in models if "shellbot" in m.lower()]
 
     def _inject_environment_prompt(self):
@@ -1168,13 +1187,15 @@ DOCUMENTAZIONE.md DEVE CONTENERE (IN QUESTO ORDINE):
 Genera DOCUMENTAZIONE.md in ITALIANO (minimo 800 parole).
 Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
 
-        # Salva opzioni originali e imposta opzioni moderate per /reverse
+        # Salva opzioni originali e imposta opzioni per documentazione lunga
         original_ctx = self.ollama.options.get("num_ctx", 8192)
-        original_predict = self.ollama.options.get("num_predict", 4096)
-        self.ollama.options["num_ctx"] = 8192
-        self.ollama.options["num_predict"] = 4096
-        status("🔧 Contesto ottimizzato: 8192/4096 token per /reverse", "info")
-        self._reverse_log(f"llm_options num_ctx=8192 num_predict=4096")
+        original_predict = self.ollama.options.get("num_predict", 2048)
+        original_timeout = self.ollama.timeout
+        self.ollama.options["num_ctx"] = 16384
+        self.ollama.options["num_predict"] = 8192  # Più spazio per documentazione completa
+        self.ollama.timeout = 600  # 10 minuti timeout
+        status("🔧 Contesto ottimizzato: 16384/8192 token + 10min timeout per /reverse", "info")
+        self._reverse_log(f"llm_options num_ctx=16384 num_predict=8192 timeout=600")
 
         try:
             self._create_session()
@@ -1210,6 +1231,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
             # Ripristina sempre le opzioni originali
             self.ollama.options["num_ctx"] = original_ctx
             self.ollama.options["num_predict"] = original_predict
+            self.ollama.timeout = original_timeout
 
     def _continue_truncated_response(self, truncated_llm: str, original_prompt: str) -> str:
         """Chiede al modello di continuare una response troncata."""

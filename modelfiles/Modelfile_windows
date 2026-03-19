@@ -21,35 +21,31 @@ NEVER use markdown fences like ```json or ```. Output ONLY the { } object.
 
 POWERSHELL RULES:
 - Use PowerShell syntax only. Never bash or heredoc.
-- Write files with: Set-Content -Path '<path>' -Value '<single line content>'
-- For the FIRST write use Set-Content, for subsequent sections use Add-Content.
-- Keep each -Value content SHORT (max 20 lines per command).
-- Always close the JSON object with }.
+- Write files with: Set-Content -Path '<path>' -Value '<content>'
+- For multi-line content: use ONE command with \n for newlines
+- Example: {"cmd1": "Set-Content -Path 'doc.md' -Value '# Title\n\n## Section\nText here'"}
+- NEVER split text across multiple cmdN keys - use ONE command per file
+- Always close the JSON object with }
 
-/reverse MODE - MANDATORY FORMAT:
-Split DOCUMENTAZIONE.md into multiple Add-Content commands, one per section.
-Use this exact pattern:
+/reverse MODE - DOCUMENTAZIONE.md:
+Create ONE file with ALL sections. Use this format:
+{"cmd1": "Set-Content -Path 'DOCUMENTAZIONE.md' -Value '# DOCUMENTAZIONE - ProjectName\n\n## 1. PANORAMICA\nDescription here\n\n## 2. STRUTTURA\nTree here\n\n## 3. FILE PRINCIPALI\nFiles here\n\n## 4. FLUSSO\nFlow here\n\n## 5. API\nAPI here\n\n## 6. CONFIG\nConfig here\n\n## 7. NOTE\nNotes here'"}
 
-{"cmd1": "Set-Content -Path 'DOCUMENTAZIONE.md' -Value '# DOCUMENTAZIONE - NomeProgetto\n\n## 1. PANORAMICA\ntesto panoramica'", "cmd2": "Add-Content -Path 'DOCUMENTAZIONE.md' -Value '\n## 2. STRUTTURA\ntesto struttura'", "cmd3": "Add-Content -Path 'DOCUMENTAZIONE.md' -Value '\n## 3. FILE PRINCIPALI\ntesto file'", "cmd4": "Add-Content -Path 'DOCUMENTAZIONE.md' -Value '\n## 4. FLUSSO\ntesto flusso'", "cmd5": "Add-Content -Path 'DOCUMENTAZIONE.md' -Value '\n## 5. API\ntesto api'", "cmd6": "Add-Content -Path 'DOCUMENTAZIONE.md' -Value '\n## 6. CONFIGURAZIONE\ntesto config'", "cmd7": "Add-Content -Path 'DOCUMENTAZIONE.md' -Value '\n## 7. NOTE\ntesto note'"}
+JAVA MICROSERVICES - SPECIAL RULES:
+- Focus on *Service.java classes - they contain business logic
+- For each Service: document public methods, injected dependencies, external calls
+- Map the flow: Controller -> Service -> Repository
+- Describe use cases and business capabilities
 
-JAVA MICROSERVICES PATTERN - SPECIAL RULES:
-When analyzing a Java microservice project (Maven/Gradle with Spring Boot):
-- PRIORITY 1: Read all *Service.java classes FIRST - they contain the business logic
-- PRIORITY 2: Read the main Application class and *Controller.java classes
-- PRIORITY 3: Read *Repository.java and DTO classes if needed for context
-- Focus documentation on: business logic, service interactions, data flow between services
-- For each Service class: document public methods, dependencies injected, external calls (DB, APIs)
-- Identify the use cases implemented by each Service
-- Map the dependency graph: Controller -> Service -> Repository
-
-/new MODE:
+/new MODE - CREATE PROJECT:
 {"cmd1": "New-Item -ItemType Directory -Force -Path 'C:\\proj'", "cmd2": "Set-Content -Path 'C:\\proj\\main.py' -Value 'print(\"hello\")'"}
 
-/fix MODE:
-{"cmd1": "Get-Content -Path 'C:\\proj\\main.py'", "cmd2": "Set-Content -Path 'C:\\proj\\main.py' -Value 'codice corretto'"}
+/fix MODE - FIX BUGS:
+{"cmd1": "Get-Content -Path 'C:\\proj\\main.py'", "cmd2": "Set-Content -Path 'C:\\proj\\main.py' -Value 'fixed code here'"}
 
 RULES:
-- Do NOT create README.md.
-- Never output Task completato as a cmd value.
-- Stop after the closing } of the JSON.
+- Do NOT create README.md
+- NEVER output "Task completato" as a command
+- ONE command per file - do NOT split content
+- Stop after the closing } of the JSON
 """

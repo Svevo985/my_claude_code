@@ -127,6 +127,11 @@ class OllamaBridgeGUI:
         self.models = []
         self.stop_flag = False  # Flag per stoppare inferenza
         self.thinking_anim = None
+        
+        # Modelli specializzati
+        self.model_create = "phi4-mini-shellbot-create:latest"  # Per /new e /fix
+        self.model_docs = "phi4-mini-shellbot-docs:latest"      # Per /reverse
+        self.current_mode = "default"
 
         # Colori tema (VS Code dark)
         self.colors = {
@@ -892,6 +897,11 @@ class OllamaBridgeGUI:
             self._clear_chat()
 
         elif command == '/fix':
+            self.mode = 'fix'
+            # Cambia modello per create/fix
+            if self.ollama and self.ollama.model != self.model_create:
+                self.ollama.model = self.model_create
+                self._add_message(f"🔄 Modello: {self.model_create} (CREATE/FIX)", "info")
             self._add_message("🔧 Modalità FIX attivata", "success")
             self._add_message("  • Leggerà file esistenti prima di agire", "info")
             self._add_message("  • Non creerà README.md (usa claude.md)", "info")
@@ -899,6 +909,11 @@ class OllamaBridgeGUI:
             self._add_message("💡 Ora scrivi la richiesta di fix (es: 'fixa il gioco che non parte')", "system")
 
         elif command == '/new':
+            self.mode = 'new'
+            # Cambia modello per create/fix
+            if self.ollama and self.ollama.model != self.model_create:
+                self.ollama.model = self.model_create
+                self._add_message(f"🔄 Modello: {self.model_create} (CREATE/FIX)", "info")
             self._add_message("🆕 Modalità NEW PROJECT attivata", "success")
             self._add_message("  • Può creare claude.md per tracciamento", "info")
             self._add_message("  • Struttura completa del progetto", "info")
@@ -1238,11 +1253,14 @@ Non usare comandi shell, solo READ + path relativo."""
                 )
 
                 # Fase 2: genera documentazione
+                # Imposta opzioni per documentazione lunga
                 original_num_predict = self.ollama.options.get('num_predict', 2048)
                 original_num_ctx = self.ollama.options.get('num_ctx', 8192)
-                self.ollama.options['num_ctx'] = 8192
-                self.ollama.options['num_predict'] = 4096
-                self._reverse_log("llm_options num_ctx=8192 num_predict=4096")
+                original_timeout = self.ollama.timeout
+                self.ollama.options['num_ctx'] = 16384
+                self.ollama.options['num_predict'] = 8192  # Più spazio per documentazione completa
+                self.ollama.timeout = 600  # 10 minuti timeout
+                self._reverse_log("llm_options num_ctx=16384 num_predict=8192 timeout=600")
 
                 java_doc_instruction = ""
                 if is_java_project:
@@ -1292,6 +1310,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                 # Ripristina opzioni
                 self.ollama.options['num_predict'] = original_num_predict
                 self.ollama.options['num_ctx'] = original_num_ctx
+                self.ollama.timeout = original_timeout
                 self.root.after(0, lambda: self.thinking_anim.stop())
 
                 if response:
@@ -1615,6 +1634,10 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
     def _cmd_reverse(self):
         self.input_field.delete("1.0", tk.END)
         self.input_field.insert("1.0", "/reverse")
+        # Cambia modello per documentazione
+        if self.ollama and self.ollama.model != self.model_docs:
+            self.ollama.model = self.model_docs
+            self._add_message(f"🔄 Modello: {self.model_docs} (DOCS/REVERSE)", "info")
         self._send_message()
 
     def _cmd_help(self):
