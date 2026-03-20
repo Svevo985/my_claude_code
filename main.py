@@ -21,6 +21,9 @@ from src.project_scanner import (
     extract_requested_files,
     read_files_content,
     read_files_content_with_stats,
+    find_java_service_classes,
+    find_java_controller_classes,
+    _is_spring_boot_project,
 )
 
 LOG_DIR = Path("./logs")
@@ -629,31 +632,83 @@ class Bridge:
             return (False, "Here-string terminator ('@) mancante o non su riga singola")
         return (True, "OK")
 
+    def _try_python_write(self, cmd: str) -> tuple[bool, bool, str]:
+        """
+        Intercetta Set-Content/Add-Content verso file .md e scrive con Python.
+        Bypassa PowerShell evitando problemi di escaping su contenuto testuale.
+        Returns: (intercepted, success, output_message)
+        """
+        pattern = re.match(
+            r"(Set-Content|Add-Content)\s+-Path\s+'([^']+\.md)'\s+-Value\s+'(.*)'$",
+            cmd.strip(), re.DOTALL | re.IGNORECASE
+        )
+        if not pattern:
+            return False, False, ""
+
+        verb    = pattern.group(1).lower()
+        fpath   = pattern.group(2)
+        content = pattern.group(3)
+
+        # Ripristina escape sequence -> caratteri reali
+        content = content.replace('\\n', '\n')
+        content = content.replace('\\t', '\t')
+        content = content.replace("''", "'")   # PowerShell escape apici singoli
+
+        try:
+            mode = 'a' if 'add-content' in verb else 'w'
+            with open(fpath, mode, encoding='utf-8') as f:
+                f.write(content)
+            return True, True, f"Scritto via Python: {fpath}"
+        except Exception as e:
+            return True, False, str(e)
+
     def _execute_commands(self, commands: List[str]) -> Tuple[int, List[Tuple[int, str, str]]]:
         success_count = 0
         failures = []
         filtered_commands = []
+
         for cmd in commands:
             # Blocca sempre creazione README.md - usa solo claude.md
             create_readme = re.search(r'>\s*[/\w-]*README\.md', cmd, re.IGNORECASE)
             if create_readme:
                 status("⛔ Saltato: README.md non creato (usa solo claude.md)", "warning")
                 continue
+
             if not cmd or not cmd.strip():
                 continue
+
             if cmd.strip().lower() in {"task completato", "completato", "done", "finished"}:
                 status("? Saltato: comando di stato non eseguibile", "warning")
                 continue
-            
+
             filtered_commands.append(cmd)
+
         for i, cmd in enumerate(filtered_commands, 1):
             cmd = self._sanitize_powershell_command(cmd)
+
             ok_heredoc, heredoc_err = self._validate_powershell_heredoc(cmd)
             if not ok_heredoc:
                 status(f"? Comando {i} non valido: {heredoc_err}", "error")
                 failures.append((i, cmd, heredoc_err))
                 continue
+
             cmd_box(cmd, i)
+
+            # ── Intercetta scrittura .md e usa Python direttamente ──
+            # Bypassa PowerShell per evitare problemi con testo libero (apostrofi,
+            # liste numerate, trattini, ecc.)
+            intercepted, py_ok, py_out = self._try_python_write(cmd)
+            if intercepted:
+                if py_ok:
+                    if py_out: print_output(py_out)
+                    status(f"✓ Comando {i} eseguito (Python write)", "success")
+                    success_count += 1
+                else:
+                    status(f"✗ Comando {i} fallito: {py_out}", "error")
+                    failures.append((i, cmd, py_out))
+                continue
+            # ── fine intercettazione .md ──
+
             ok, out = self.ops.execute_command(cmd)
             if ok:
                 if out: print_output(out)
@@ -662,11 +717,14 @@ class Bridge:
             else:
                 status(f"✗ Comando {i} fallito: {out}", "error")
                 failures.append((i, cmd, out))
+
         self._commands_executed = success_count > 0
+
         if success_count > 0 and self.proj and self.mode in {"new", "fix"}:
             fixed = fix_project_files(self.proj)
             if fixed > 0:
                 status(f"🔧 Fixati {fixed} file", "success")
+
         return success_count, failures
 
     def _test(self) -> bool:
@@ -1016,6 +1074,20 @@ JSON:"""
         if not candidates:
             self._reverse_log("no_candidates")
             return "❌ Nessun file rilevante trovato"
+        
+        # Rileva se è progetto Java Spring Boot
+        is_java = any(item[0].suffix.lower() == ".java" for item in candidates)
+        has_build = (target / "pom.xml").exists() or (target / "build.gradle").exists()
+        is_java_project = is_java and has_build
+        is_spring = _is_spring_boot_project(target) if is_java_project else False
+        
+        # Debug logging
+        status(f"🔍 Debug: is_java={is_java}, has_build={has_build}, is_java_project={is_java_project}", "info")
+        status(f"🔍 Debug: is_spring={is_spring}", "info")
+        
+        if is_spring:
+            status("🍃 Rilevato progetto SPRING BOOT - Priorità alle classi @Service", "success")
+            self._reverse_log("spring_boot_project=True")
         tree = build_tree_from_paths(
             [rel for rel, _, _ in candidates],
             root_name=target.name,
@@ -1107,11 +1179,20 @@ Non usare comandi shell, solo READ + path relativo."""
 
         # Per progetti Java: includi SEMPRE le classi Service (priorità massima)
         java_services = []
+        java_controllers = []
         if is_java_project:
             java_services = find_java_service_classes(candidates)
+            java_controllers = find_java_controller_classes(candidates)
             if java_services:
                 self._reverse_log(f"java_services_found={len(java_services)}")
-                status(f"📦 Trovate {len(java_services)} classi Service Java", "info")
+                if is_spring:
+                    status(f"🍃 {len(java_services)} classi Service Spring trovate - INCLUSE AUTOMATICAMENTE", "success")
+                else:
+                    status(f"📦 Trovate {len(java_services)} classi Service Java", "info")
+                for svc in java_services[:5]:
+                    status(f"   ► {svc.as_posix()}", "info")
+            if java_controllers:
+                self._reverse_log(f"java_controllers_found={len(java_controllers)}")
 
         # Includi sempre README/CLAUDE se presenti
         if not selected_by_llm:
@@ -1120,18 +1201,26 @@ Non usare comandi shell, solo READ + path relativo."""
             self._reverse_log(f"fallback_selected={len(selected_by_llm)}")
         self._reverse_log(f"selection_source={selection_source}")
 
-        # Costruisci lista finale: PRIMA le Service, poi le altre selezionate
-        selected = list(selected_by_llm)
-        for svc in java_services:
-            if svc not in selected:
-                selected.insert(0, svc)  # Inserisci Service all'inizio
+        # Costruisci lista finale: PRIMA le Service (se Spring), poi le altre selezionate
+        selected = []
         
-        # Aggiungi anche i Controller se sono Java project
-        java_controllers = find_java_controller_classes(candidates)
-        for ctrl in java_controllers:
-            if ctrl not in selected and len(selected) < 15:
-                selected.append(ctrl)
+        # Se è Spring Boot: metti Service ALL'INIZIO assoluamente
+        if is_spring and java_services:
+            selected.extend(java_services)
+            self._reverse_log(f"spring_services_added_first={len(java_services)}")
         
+        # Poi aggiungi le selezionate da LLM/fallback
+        for item in selected_by_llm:
+            if item not in selected:
+                selected.append(item)
+        
+        # Aggiungi Controller se non sono già inclusi (max 15 file totali)
+        if java_controllers:
+            for ctrl in java_controllers:
+                if ctrl not in selected and len(selected) < 15:
+                    selected.append(ctrl)
+        
+        # Infine README/CLAUDE
         docs = find_primary_docs(target)
         for d in docs:
             if d not in selected:

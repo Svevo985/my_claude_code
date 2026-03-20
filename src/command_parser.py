@@ -124,7 +124,115 @@ class CommandParser:
         # Il parser proverà a fixarlo
         return text if text.startswith('{') else ""
 
+    def _fix_unclosed_strings_json(self, json_str: str) -> str:
+        """
+        Fixa JSON dove le stringhe non sono chiuse correttamente.
+        Quando trova "cmdN": dopo una stringa non chiusa, chiude automaticamente la precedente.
+        """
+        result = []
+        in_string = False
+        escape_next = False
+        i = 0
+        
+        while i < len(json_str):
+            char = json_str[i]
+            
+            if escape_next:
+                result.append(char)
+                escape_next = False
+                i += 1
+                continue
+            
+            if char == '\\' and in_string:
+                result.append(char)
+                escape_next = True
+                i += 1
+                continue
+            
+            # Controlla se stiamo per iniziare un nuovo cmd mentre siamo in una stringa
+            if in_string and char == '"':
+                # Guarda avanti per vedere se questa virgoletta chiude la stringa
+                # e subito dopo c'è una virgola e un nuovo cmd
+                rest = json_str[i+1:].lstrip()
+                if rest.startswith(',') or rest.startswith('}'):
+                    # Questa virgoletta chiude la stringa correttamente
+                    result.append(char)
+                    in_string = False
+                    i += 1
+                    continue
+                elif re.match(r'"cmd\d+"', rest):
+                    # Nuova chiave cmd - chiudi la stringa corrente se non lo è già
+                    result.append(char)
+                    in_string = False
+                    i += 1
+                    continue
+                else:
+                    # Virgoletta nel mezzo della stringa - potrebbe essere parte del contenuto
+                    result.append(char)
+                    i += 1
+                    continue
+            
+            # FIX CRITICO: se troviamo "cmdN": mentre siamo in una stringa, chiudila forzatamente
+            if in_string:
+                # Cerca se nei prossimi caratteri c'è un nuovo cmd
+                lookahead = json_str[i:i+20]
+                cmd_match = re.match(r'[^"]*"\s*,\s*"cmd\d+"', lookahead)
+                if cmd_match:
+                    # Chiudi forzatamente la stringa corrente
+                    result.append('",')
+                    in_string = False
+                    # Salta fino alla prossima chiave cmd
+                    skip_to = json_str.find('"cmd', i)
+                    if skip_to != -1:
+                        i = skip_to
+                        continue
+            
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                result.append(char)
+                i += 1
+                continue
+            
+            result.append(char)
+            i += 1
+        
+        # Se siamo ancora in una stringa alla fine, chiudila
+        if in_string:
+            result.append('"')
+        
+        return ''.join(result)
+    
+    def _fix_powershell_string_escapes(self, json_str: str) -> str:
+        """
+        Fixa problemi specifici di PowerShell nelle stringhe JSON:
+        - Caratteri speciali PowerShell non escapeati
+        - Backtick che rompono il parsing
+        - Parentesi e pipe nel contenuto
+        """
+        # Pattern per trovare i valori delle stringhe JSON
+        def fix_string_value(match):
+            key = match.group(1)
+            value = match.group(2)
+            
+            # Escape backtick per PowerShell
+            value = value.replace('`', '``')
+            
+            # Escape parentesi quadre nel contenuto (rompono PowerShell)
+            # Ma non quelle già escapeate
+            value = re.sub(r'(?<!\\)\[', r'\[', value)
+            value = re.sub(r'(?<!\\)\]', r'\]', value)
+            
+            # Escape pipe nel contenuto
+            value = re.sub(r'(?<!\\)\|', r'\|', value)
+            
+            return f'"{key}": "{value}"'
+        
+        # Applica solo ai valori cmd
+        pattern = r'"(cmd\d+)"\s*:\s*"((?:[^"\\]|\\.)*)"'
+        return re.sub(pattern, fix_string_value, json_str, flags=re.DOTALL)
+
     def _try_parse_json(self, json_str: str, raw_response: str) -> ParsedCommand:
+        # 1. Prova parsing diretto
         try:
             data = json.loads(json_str)
             if not isinstance(data, dict):
@@ -150,35 +258,73 @@ class CommandParser:
             return ParsedCommand([], raw_response, False, "Nessun comando trovato nel JSON")
 
         except json.JSONDecodeError as e:
-            # Prova a fixare JSON con newline non escapeati
-            fixed_json = self._fix_newline_in_string_json(json_str)
-            if fixed_json != json_str:
-                try:
-                    data = json.loads(fixed_json)
-                    if isinstance(data, dict):
-                        commands = []
-                        cmd_keys = sorted([k for k in data.keys() if k.startswith("cmd")])
-                        for key in cmd_keys:
-                            if isinstance(data[key], str):
-                                commands.append(self._clean_command(data[key]))
-                        if commands:
-                            return ParsedCommand(commands, raw_response, True)
-                except:
-                    pass
+            pass
+        
+        # 2. Fixa stringhe non chiuse (quando LLM non chiude prima di cmd successivo)
+        fixed_unclosed = self._fix_unclosed_strings_json(json_str)
+        try:
+            data = json.loads(fixed_unclosed)
+            if isinstance(data, dict):
+                commands = []
+                cmd_keys = sorted([k for k in data.keys() if k.startswith("cmd")])
+                for key in cmd_keys:
+                    if isinstance(data[key], str):
+                        commands.append(self._clean_command(data[key]))
+                if commands:
+                    return ParsedCommand(commands, raw_response, True)
+        except:
+            pass
+        
+        # 3. Fixa PowerShell escapes
+        fixed_ps = self._fix_powershell_string_escapes(fixed_unclosed)
+        try:
+            data = json.loads(fixed_ps)
+            if isinstance(data, dict):
+                commands = []
+                cmd_keys = sorted([k for k in data.keys() if k.startswith("cmd")])
+                for key in cmd_keys:
+                    if isinstance(data[key], str):
+                        commands.append(self._clean_command(data[key]))
+                if commands:
+                    return ParsedCommand(commands, raw_response, True)
+        except:
+            pass
+        
+        # 4. Prova a fixare newline non escapeati
+        fixed_newlines = self._fix_newline_in_string_json(fixed_ps)
+        if fixed_newlines != json_str:
+            try:
+                data = json.loads(fixed_newlines)
+                if isinstance(data, dict):
+                    commands = []
+                    cmd_keys = sorted([k for k in data.keys() if k.startswith("cmd")])
+                    for key in cmd_keys:
+                        if isinstance(data[key], str):
+                            commands.append(self._clean_command(data[key]))
+                    if commands:
+                        return ParsedCommand(commands, raw_response, True)
+            except:
+                pass
 
-            # Ultimo tentativo: estrazione manuale con regex
-            manual_commands = self._extract_commands_manually(raw_response)
-            if manual_commands:
-                # Pulisci i comandi estratti manualmente
-                manual_commands = [self._clean_command(cmd) for cmd in manual_commands]
-                return ParsedCommand(manual_commands, raw_response, True)
+        # 5. Ultimo tentativo: estrazione manuale con regex
+        manual_commands = self._extract_commands_manually(raw_response)
+        if manual_commands:
+            # Pulisci i comandi estratti manualmente
+            manual_commands = [self._clean_command(cmd) for cmd in manual_commands]
+            return ParsedCommand(manual_commands, raw_response, True)
 
-            return ParsedCommand([], raw_response, False, f"JSON non valido: {e}")
+        return ParsedCommand([], raw_response, False, f"JSON non valido: {e}")
     
     def _clean_command(self, cmd: str) -> str:
         """
         Pulisce il comando da caratteri di escape e quote di troppo.
         """
+        # ✅ FIX CRITICO: Rimuovi virgole extra DOPO la chiusura virgoletta
+        # Pattern: "...',\n"  ->  "..."
+        # Questo succede quando LLM mette virgole PowerShell-style alla fine
+        cmd = re.sub(r"'\s*,\s*\n?\s*$", "'", cmd)
+        cmd = re.sub(r"'\s*,\s*$", "'", cmd)
+        
         # Rimuovi " finale se presente (errore comune di parsing)
         if cmd.endswith('"') and not cmd.endswith('\\"'):
             cmd = cmd[:-1]
@@ -197,7 +343,7 @@ class CommandParser:
         # ✅ FIX: Correggi 'EOF" → 'EOF' (errore comune LLM)
         cmd = cmd.replace("'EOF\"", "'EOF'")
         cmd = cmd.replace("'EOF\" ", "'EOF' ")
-        
+
         # ✅ FIX: Correggi EOF" → EOF (virgoletta extra a fine)
         cmd = re.sub(r'EOF"\s*$', 'EOF', cmd)
         cmd = re.sub(r'EOF" ', 'EOF ', cmd)

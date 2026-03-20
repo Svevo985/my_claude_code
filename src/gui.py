@@ -31,6 +31,7 @@ from src.project_scanner import (
     read_files_content_with_stats,
     find_java_service_classes,
     find_java_controller_classes,
+    _is_spring_boot_project,
 )
 
 CONFIG_FILE = Path("./config.json")
@@ -1140,6 +1141,11 @@ class OllamaBridgeGUI:
                 )
                 has_build_file = (target / "pom.xml").exists() or (target / "build.gradle").exists() or (target / "settings.gradle").exists()
                 is_java_project = has_java_files and has_build_file
+                is_spring = _is_spring_boot_project(target) if is_java_project else False
+                
+                if is_spring:
+                    self.root.after(0, lambda: self._add_message("🍃 Rilevato progetto SPRING BOOT - Priorità alle classi @Service", "success"))
+                    self._reverse_log("spring_boot_project=True")
                 
                 java_instruction = ""
                 if is_java_project:
@@ -1192,30 +1198,44 @@ Non usare comandi shell, solo READ + path relativo."""
                     
                 # Per progetti Java: includi SEMPRE le classi Service (priorità massima)
                 java_services = []
+                java_controllers = []
                 if is_java_project:
                     java_services = find_java_service_classes(candidates)
+                    java_controllers = find_java_controller_classes(candidates)
                     if java_services:
                         self._reverse_log(f"java_services_found={len(java_services)}")
-                        self.root.after(0, lambda n=len(java_services):
-                            self._add_message(f"📦 Trovate {n} classi Service Java", "info")
-                        )
+                        if is_spring:
+                            self.root.after(0, lambda n=len(java_services):
+                                self._add_message(f"🍃 {n} classi Service Spring trovate - INCLUSE AUTOMATICAMENTE", "success")
+                            )
+                        else:
+                            self.root.after(0, lambda n=len(java_services):
+                                self._add_message(f"📦 Trovate {n} classi Service Java", "info")
+                            )
 
                 if not selected_by_llm:
                     selection_source = "fallback"
                     selected_by_llm = pick_default_files(candidates, limit=10)
                     self._reverse_log(f"fallback_selected={len(selected_by_llm)}")
 
-                # Costruisci lista finale: PRIMA le Service, poi le altre selezionate
-                selected = list(selected_by_llm)
-                for svc in java_services:
-                    if svc not in selected:
-                        selected.insert(0, svc)  # Inserisci Service all'inizio
+                # Costruisci lista finale: PRIMA le Service (se Spring), poi le altre selezionate
+                selected = []
                 
-                # Aggiungi anche i Controller se sono Java project
-                java_controllers = find_java_controller_classes(candidates)
-                for ctrl in java_controllers:
-                    if ctrl not in selected and len(selected) < 15:
-                        selected.append(ctrl)
+                # Se è Spring Boot: metti Service ALL'INIZIO assolutamente
+                if is_spring and java_services:
+                    selected.extend(java_services)
+                    self._reverse_log(f"spring_services_added_first={len(java_services)}")
+                
+                # Poi aggiungi le selezionate da LLM/fallback
+                for item in selected_by_llm:
+                    if item not in selected:
+                        selected.append(item)
+                
+                # Aggiungi Controller se non sono già inclusi (max 15 file totali)
+                if java_controllers:
+                    for ctrl in java_controllers:
+                        if ctrl not in selected and len(selected) < 15:
+                            selected.append(ctrl)
 
                 # Includi sempre README/CLAUDE se presenti (aggiunti dal bridge)
                 docs = find_primary_docs(target)
@@ -1353,7 +1373,8 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                     self.root.after(0, lambda: self._add_message("⚠️ Nessuna risposta", "warning"))
                     
             except Exception as e:
-                self.root.after(0, lambda: self._add_message(f"❌ Errore: {e}", "error"))
+                error_msg = str(e)
+                self.root.after(0, lambda err=error_msg: self._add_message(f"❌ Errore: {err}", "error"))
             finally:
                 self.is_thinking = False
                 self.root.after(0, lambda: self._set_status("● Connesso", "success"))

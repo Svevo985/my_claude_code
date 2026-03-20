@@ -266,6 +266,53 @@ def _is_java_project(candidates: List[Tuple[Path, int, Set[str]]]) -> bool:
     return has_java and has_build
 
 
+def _is_spring_boot_project(root: Path) -> bool:
+    """
+    Detect if project is Spring Boot by checking:
+    1. pom.xml contains spring-boot-starter or @SpringBootApplication
+    2. build.gradle contains springboot plugin
+    """
+    root = root.resolve()
+    
+    # Check pom.xml FIRST
+    pom_path = root / "pom.xml"
+    if pom_path.exists():
+        try:
+            pom_content = pom_path.read_text(encoding='utf-8', errors='ignore').lower()
+            spring_indicators = [
+                'spring-boot-starter',
+                'springboot',
+                'springframework.boot',
+            ]
+            for indicator in spring_indicators:
+                if indicator in pom_content:
+                    return True  # Spring Boot trovato!
+        except Exception as e:
+            print(f"DEBUG: Errore lettura pom.xml: {e}")
+    
+    # Check build.gradle
+    gradle_path = root / "build.gradle"
+    if gradle_path.exists():
+        try:
+            gradle_content = gradle_path.read_text(encoding='utf-8', errors='ignore').lower()
+            if 'springboot' in gradle_content or 'spring-boot' in gradle_content:
+                return True
+        except:
+            pass
+    
+    # Check main application class
+    for rel, _, _ in candidates:
+        if rel.name.endswith("Application.java"):
+            try:
+                content = (root / rel).read_text(encoding='utf-8', errors='ignore')
+                if '@SpringBootApplication' in content:
+                    return True
+            except:
+                pass
+    
+    return False
+
+
 def find_java_service_classes(
     candidates: List[Tuple[Path, int, Set[str]]]
 ) -> List[Path]:
