@@ -677,7 +677,7 @@ class Bridge:
         verb = verb_match.group(1).lower()
 
         # Estrai il path — deve essere un .md
-        path_match = re.search(r"-Path\s+['"]([^'"]+\.md)['"]", cmd_stripped, re.IGNORECASE)
+        path_match = re.search(r"-Path\s+'([^']+\.md)'", cmd_stripped, re.IGNORECASE)        
         if not path_match:
             return False, False, ""
         fpath = path_match.group(1)
