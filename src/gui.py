@@ -1373,7 +1373,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                     self.root.after(0, lambda: self._add_message("⚠️ Nessuna risposta", "warning"))
                     
             except Exception as exc:
-                error_msg = str(e)
+                error_msg = str(exc)
                 self.root.after(0, lambda err=error_msg: self._add_message(f"❌ Errore: {err}", "error"))
             finally:
                 self.is_thinking = False
@@ -1557,7 +1557,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
 
             except Exception as exc:
                 # Gestione errori dettagliata
-                error_msg = str(e) if e else "Errore sconosciuto"
+                error_msg = str(exc) if exc else "Errore sconosciuto"
                 error_type = type(e).__name__
 
                 self.root.after(0, lambda: self._add_message(f"❌ Errore ({error_type}): {error_msg}", "error"))
@@ -1737,3 +1737,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

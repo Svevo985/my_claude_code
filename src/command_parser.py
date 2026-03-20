@@ -313,7 +313,7 @@ class CommandParser:
             manual_commands = [self._clean_command(cmd) for cmd in manual_commands]
             return ParsedCommand(manual_commands, raw_response, True)
 
-        return ParsedCommand([], raw_response, False, f"JSON non valido: {e}")
+        return ParsedCommand([], raw_response, False, f"JSON non valido: {exc}")
     
     def _clean_command(self, cmd: str) -> str:
         """
@@ -531,3 +531,4 @@ class CommandParser:
             if pattern.lower() in cmd_lower:
                 return (False, f"Comando bloccato: {desc}")
         return (True, "OK")
+
