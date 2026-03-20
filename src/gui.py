@@ -196,7 +196,7 @@ class OllamaBridgeGUI:
             )
             output = (result.stdout or "") + (result.stderr or "")
             return (result.returncode == 0, output.strip())
-        except Exception as e:
+        except Exception as exc:
             return (False, f"Errore: {e}")
 
     def _load_template_modelfile(self) -> str | None:
@@ -699,7 +699,7 @@ class OllamaBridgeGUI:
                     self.root.after(0, self._on_connected)
                 else:
                     self.root.after(0, self._on_connection_failed, "Ollama non risponde")
-            except Exception as e:
+            except Exception as exc:
                 self.root.after(0, self._on_connection_failed, str(e))
 
         self._set_status("Connessione...", "warning")
@@ -1065,7 +1065,7 @@ class OllamaBridgeGUI:
                         self._add_message(line, "code")
                     if len(content.split('\n')) > 50:
                         self._add_message("... (troncato)", "info")
-                except Exception as e:
+                except Exception as exc:
                     self._add_message(f"❌ Errore lettura: {e}", "error")
             else:
                 self._add_message("⚠️ Nessun claude.md trovato nella directory corrente", "warning")
@@ -1367,12 +1367,12 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                                 doc_file.write_text(doc_content)
                                 self.root.after(0, lambda: self._add_message(f"📝 Documentazione salvata: {doc_file}", "success"))
                                 self.root.after(0, lambda: self._add_message("✅ Contenuto convertito: \\n → newline reali", "info"))
-                            except Exception as e:
+                            except Exception as exc:
                                 self.root.after(0, lambda e=e: self._add_message(f"⚠️ Salvataggio fallito: {e}", "warning"))
                 else:
                     self.root.after(0, lambda: self._add_message("⚠️ Nessuna risposta", "warning"))
                     
-            except Exception as e:
+            except Exception as exc:
                 error_msg = str(e)
                 self.root.after(0, lambda err=error_msg: self._add_message(f"❌ Errore: {err}", "error"))
             finally:
@@ -1494,7 +1494,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                             # Per reverse: più contenuto per file (3000 chars)
                             max_chars = 3000 if is_reverse else 1500
                             file_context += f"## {rel_path}:\n```\n{content[:max_chars]}\n```\n\n"
-                        except Exception as e:
+                        except Exception as exc:
                             pass
 
                     if file_context:
@@ -1555,7 +1555,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                         self.session.add_message("assistant", response)
                         self.root.after(0, lambda: self._add_message(response, "ai"))
 
-            except Exception as e:
+            except Exception as exc:
                 # Gestione errori dettagliata
                 error_msg = str(e) if e else "Errore sconosciuto"
                 error_type = type(e).__name__

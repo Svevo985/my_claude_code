@@ -287,7 +287,7 @@ def _is_spring_boot_project(root: Path) -> bool:
             for indicator in spring_indicators:
                 if indicator in pom_content:
                     return True  # Spring Boot trovato!
-        except Exception as e:
+        except Exception as exc:
             print(f"DEBUG: Errore lettura pom.xml: {e}")
     
     # Check build.gradle

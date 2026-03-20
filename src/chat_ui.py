@@ -139,7 +139,7 @@ class ChatApp(App):
             
             self.ollama = OllamaClient(base_url, model, timeout, options=ollama_options)
             self.session = self.session_manager.create_session()
-        except Exception as e:
+        except Exception as exc:
             self.ollama = None
     
     def compose(self) -> ComposeResult:
@@ -254,7 +254,7 @@ class ChatApp(App):
             else:
                 self.call_from_thread(self._add_message, "⚠️ Nessuna risposta ricevuta.", False)
                 
-        except Exception as e:
+        except Exception as exc:
             self.call_from_thread(self._remove_thinking)
             self.call_from_thread(self._add_message, f"⚠️ Errore: {str(e)}", False)
 

@@ -145,7 +145,7 @@ class ClaudeContext:
         try:
             self._c = self.f.read_text(encoding='utf-8', errors='replace')
             return True
-        except Exception as e: logger.error(f"Errore load CLAUDE.md: {e}"); return False
+        except Exception as exc: logger.error(f"Errore load CLAUDE.md: {e}"); return False
     def get(self) -> str: return self._c
     def exists(self) -> bool: return self.f.exists()
     def ctx(self) -> str:
@@ -186,7 +186,7 @@ class Tester:
             r = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=str(self.d), timeout=timeout)
             return (r.returncode==0, r.stdout, r.stderr)
         except subprocess.TimeoutExpired: return False, "", f"Timeout {timeout}s"
-        except Exception as e: return False, "", str(e)
+        except Exception as exc: return False, "", str(e)
 
 class State:
     def __init__(self, f: Path):
@@ -246,7 +246,7 @@ def _fix_file_content(filepath: Path, fix_func) -> bool:
             logger.info(f"Fixato file: {filepath}")
             return True
         return False
-    except Exception as e:
+    except Exception as exc:
         logger.error(f"Errore fix {filepath}: {e}")
         return False
 
@@ -471,7 +471,7 @@ class Bridge:
             )
             output = (result.stdout or "") + (result.stderr or "")
             return (result.returncode == 0, output.strip())
-        except Exception as e:
+        except Exception as exc:
             return (False, f"Errore: {e}")
 
     def _load_template_modelfile(self) -> Optional[str]:
@@ -488,7 +488,7 @@ class Bridge:
             if path.exists() and path.is_file():
                 try:
                     return path.read_text(encoding='utf-8', errors='replace')
-                except Exception as e:
+                except Exception as exc:
                     logger.error(f"Errore lettura {path}: {e}")
         return None
 
@@ -505,7 +505,7 @@ class Bridge:
         models = set()
         try:
             models.update(self.ollama.list_models())
-        except Exception as e:
+        except Exception as exc:
             logger.error(f"list_models API error: {e}")
         ok, out = self.ops.execute_command("ollama list", timeout=60)
         if ok and out:
@@ -659,7 +659,7 @@ class Bridge:
             with open(fpath, mode, encoding='utf-8') as f:
                 f.write(content)
             return True, True, f"Scritto via Python: {fpath}"
-        except Exception as e:
+        except Exception as exc:
             return True, False, str(e)
 
     def _execute_commands(self, commands: List[str]) -> Tuple[int, List[Tuple[int, str, str]]]:
@@ -773,8 +773,8 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                 if p.is_valid and p.commands:
                     status(f"🔧 Tentativo fix ({fix_attempts}/{max_fix_attempts})", "running")
                     self._execute_commands(p.commands[:1])
-            except Exception as e:
-                logger.exception(f"Fix err: {e}")
+            except Exception as exc:
+                logger.exception(f"Fix err: {exc}")
                 return False
         return False
 
@@ -805,7 +805,7 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                 if len(content) > 800:
                     content = content[:800] + "\n... (troncato - file lungo)"
                 context += f"### {f.name}:\n```\n{content}\n```\n\n"
-            except Exception as e:
+            except Exception as exc:
                 logger.error(f"Errore lettura {f}: {e}")
         return context
 
@@ -822,7 +822,7 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                 with open(claude_md, 'w', encoding='utf-8') as f:
                     f.write(f"# Fix History\n\n{fix_entry}")
             status("📝 claude.md aggiornato", "success")
-        except Exception as e:
+        except Exception as exc:
             logger.error(f"Errore update claude.md: {e}")
 
     def _done(self, t) -> bool:
@@ -1039,7 +1039,7 @@ JSON:"""
                     self.sess.add_message("user", "Genera i comandi JSON per completare il task")
                     continue
                 return "Nessun comando"
-            except Exception as e:
+            except Exception as exc:
                 self.thinking.stop()
                 status(f"❌ Errore: {e}", "error")
                 logger.exception(f"Chat error: {e}")
@@ -1162,7 +1162,7 @@ Non usare comandi shell, solo READ + path relativo."""
             self.thinking.stop()
             self._reverse_log(f"select_resp_len={len(select_resp)}")
             self._reverse_log(f"select_resp_raw={select_resp.strip()[:2000]}")
-        except Exception as e:
+        except Exception as exc:
             self.thinking.stop()
             logger.exception(f"Reverse select error: {e}")
             self._reverse_log(f"select_error={e}")
@@ -1312,7 +1312,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                 if doc_file.exists():
                     return doc_file.read_text(encoding='utf-8', errors='replace')[:3000]
             return llm
-        except Exception as e:
+        except Exception as exc:
             logger.exception(f"Reverse error: {e}")
             self._reverse_log(f"reverse_error={e}")
             return f"❌ Errore: {e}"
@@ -1352,7 +1352,7 @@ Importante: chiudi il JSON con }} alla fine."""
             
             # Combina originale + continuazione
             return truncated_llm + "\n" + continuation
-        except Exception as e:
+        except Exception as exc:
             logger.error(f"Continue error: {e}")
             return truncated_llm
 
@@ -1402,7 +1402,7 @@ Importante: chiudi il JSON con }} alla fine."""
                     doc_file.write_text(doc, encoding='utf-8')
                     status(f"📝 Documentazione salvata: {doc_file}", "success")
                     print(f"\n  {Colors.CYAN}{doc[:1000]}{'...' if len(doc) > 1000 else ''}{Colors.RESET}\n")
-                except Exception as e:
+                except Exception as exc:
                     status(f"Errore salvataggio: {e}", "error")
                     print(f"\n  {Colors.CYAN}{doc}{Colors.RESET}\n")
             else:

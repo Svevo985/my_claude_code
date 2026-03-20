@@ -176,7 +176,7 @@ class FileOperations:
 
         except subprocess.TimeoutExpired:
             return (False, "Timeout: il comando ha impiegato troppo tempo")
-        except Exception as e:
+        except Exception as exc:
             return (False, f"Errore: {str(e)}")
 
     def format_path_for_shell(self, path: Path) -> str:
@@ -234,7 +234,7 @@ class FileOperations:
             return (False, f"File non trovato: {filepath}")
         except PermissionError:
             return (False, f"Permesso negato: {filepath}")
-        except Exception as e:
+        except Exception as exc:
             return (False, f"Errore lettura: {str(e)}")
     
     def write_file(self, filepath: str, content: str) -> tuple[bool, str]:
@@ -262,7 +262,7 @@ class FileOperations:
             return (True, f"File scritto: {filepath}")
         except PermissionError:
             return (False, f"Permesso negato: {filepath}")
-        except Exception as e:
+        except Exception as exc:
             return (False, f"Errore scrittura: {str(e)}")
     
     def append_file(self, filepath: str, content: str) -> tuple[bool, str]:
@@ -276,7 +276,7 @@ class FileOperations:
                 f.write(content)
             
             return (True, f"Contenuto aggiunto a: {filepath}")
-        except Exception as e:
+        except Exception as exc:
             return (False, f"Errore append: {str(e)}")
     
     def list_directory(self, path: str = ".") -> tuple[bool, str]:
@@ -292,5 +292,5 @@ class FileOperations:
                 items.append(f"{prefix} {item.name}")
             
             return (True, "\n".join(items))
-        except Exception as e:
+        except Exception as exc:
             return (False, f"Errore lista: {str(e)}")
