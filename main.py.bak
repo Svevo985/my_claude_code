@@ -662,50 +662,6 @@ class Bridge:
         except Exception as e:
             return True, False, str(e)
 
-    def _try_python_write(self, cmd: str) -> tuple[bool, bool, str]:
-        """
-        Intercetta Set-Content/Add-Content verso file .md e scrive con Python.
-        Bypassa PowerShell evitando problemi con apici, liste numerate, trattini ecc.
-        Returns: (intercepted, success, output_message)
-        """
-        cmd_stripped = cmd.strip()
-
-        # Verifica che sia Set-Content o Add-Content
-        verb_match = re.match(r'(Set-Content|Add-Content)\s+', cmd_stripped, re.IGNORECASE)
-        if not verb_match:
-            return False, False, ""
-        verb = verb_match.group(1).lower()
-
-        # Estrai il path — deve essere un .md
-        path_match = re.search(r"-Path\s+['"]([^'"]+\.md)['"]", cmd_stripped, re.IGNORECASE)
-        if not path_match:
-            return False, False, ""
-        fpath = path_match.group(1)
-
-        # Estrai il valore — tutto dopo -Value ' fino alla fine
-        value_match = re.search(r"-Value\s+'(.*)", cmd_stripped, re.DOTALL | re.IGNORECASE)
-        if not value_match:
-            return False, False, ""
-
-        content = value_match.group(1)
-
-        # Rimuovi la virgoletta finale se presente
-        if content.endswith("'"):
-            content = content[:-1]
-
-        # Ripristina escape sequence
-        content = content.replace('\\n', '\n')
-        content = content.replace('\\t', '\t')
-        content = content.replace("''", "'")   # PowerShell escape apici singoli
-
-        try:
-            mode = 'a' if 'add-content' in verb else 'w'
-            with open(fpath, mode, encoding='utf-8') as f:
-                f.write(content)
-            return True, True, f"Scritto via Python: {fpath}"
-        except Exception as exc:
-            return True, False, str(exc)
-
     def _execute_commands(self, commands: List[str]) -> Tuple[int, List[Tuple[int, str, str]]]:
         success_count = 0
         failures = []
