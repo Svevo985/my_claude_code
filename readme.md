@@ -239,6 +239,48 @@ Il LLM risponde **SOLO** con JSON (system prompt in Ollama):
 | Lista file | `{"cmd1": "ls -la"}` |
 | Esecuzione | `{"cmd1": "python3 test.py"}` |
 
+## 🔧 Parser JSON - Cosa gestisce
+
+Il `CommandParser` (`src/command_parser.py`) estrae e ripara automaticamente i comandi JSON dalle risposte LLM:
+
+### Estrazione comandi
+
+| Caso | Descrizione |
+|------|-------------|
+| ✅ **JSON in code block** | ` ```json {...} ``` ` - priorità massima |
+| ✅ **JSON inline** | `{"cmd1": "..."}` nel testo |
+| ✅ **JSON troncato** | Mancanza chiusura graffe |
+| ✅ **Thinking tags** | Rimuove `<think>...</think>` |
+
+### Fix automatici
+
+| Problema | Fix applicato |
+|----------|---------------|
+| **Stringhe non chiuse** | Chiude automaticamente prima del prossimo `cmdN` |
+| **Newline non escapeati** | Converte `\n` reali in `\\n` dentro stringhe |
+| **Tab non escapeati** | Converte `\t` reali in `\\t` |
+| **Virgolette extra** | Rimuove `"` finali non escapeate |
+| **EOF malformato** | Corregge `'EOF"` → `'EOF'` negli heredoc |
+| **Escape PowerShell** | Fixa backtick, parentesi quadre, pipe |
+| **Virgole extra** | Rimuove `,` dopo chiusura stringhe |
+| **Estrazione manuale** | Regex fallback per JSON irrecuperabili |
+
+### Formato comandi supportati
+
+```json
+// Formato nuovo (multi-comando)
+{"cmd1": "mkdir proj", "cmd2": "cat << 'EOF' > file\ncontent\nEOF"}
+
+// Formato legacy (singolo)
+{"command": "mkdir proj"}
+```
+
+### Sicurezza
+
+- **Pattern bloccati**: `rm -rf /`, `sudo rm`, `mkfs`, `dd if=`
+- **Validazione heredoc**: controlla sintassi PowerShell `cat << 'EOF'`
+- **Intercept scrittura .md**: usa Python invece di PowerShell per evitare problemi con apici, liste, trattini
+
 ## 🔧 Fix Automatico
 
 Il bridge include fix automatico per:
