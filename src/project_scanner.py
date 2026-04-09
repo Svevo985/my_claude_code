@@ -233,8 +233,22 @@ def apply_reverse_policy(
 
 
 def _is_java_service_file(rel: Path) -> bool:
-    """Check if file is a Java Service class (ends with Service.java)."""
-    return rel.suffix.lower() == ".java" and rel.stem.endswith("Service")
+    """Check if file is a Java Service class (ends with Service.java or is in a service package)."""
+    if rel.suffix.lower() != ".java":
+        return False
+    stem = rel.stem.lower()
+    if stem.endswith("service") or stem.endswith("serviceimpl") or stem.endswith("manager") or stem.endswith("processor"):
+        return True
+    
+    parts = [p.lower() for p in rel.parent.parts]
+    if "service" in parts or "services" in parts or "business" in parts or "logic" in parts or "impl" in parts:
+        if not (stem.endswith("dto") or stem.endswith("request") or stem.endswith("response") or 
+                stem.endswith("config") or stem.endswith("configuration") or 
+                stem.endswith("exception") or stem.endswith("repository") or stem.endswith("dao") or
+                stem.endswith("controller")):
+            return True
+            
+    return False
 
 
 def _is_java_controller_file(rel: Path) -> bool:
@@ -260,10 +274,8 @@ def _is_java_config_file(rel: Path) -> bool:
 
 
 def _is_java_project(candidates: List[Tuple[Path, int, Set[str]]]) -> bool:
-    """Detect if project is a Java project (has .java files and pom.xml/build.gradle)."""
-    has_java = any(item[0].suffix.lower() == ".java" for item in candidates)
-    has_build = any(item[0].name.lower() in {"pom.xml", "build.gradle", "settings.gradle"} for item in candidates)
-    return has_java and has_build
+    """Detect if project is a Java project (has .java files)."""
+    return any(item[0].suffix.lower() == ".java" for item in candidates)
 
 
 def _is_spring_boot_project(root: Path) -> bool:
@@ -301,14 +313,13 @@ def _is_spring_boot_project(root: Path) -> bool:
             pass
     
     # Check main application class
-    for rel, _, _ in candidates:
-        if rel.name.endswith("Application.java"):
-            try:
-                content = (root / rel).read_text(encoding='utf-8', errors='ignore')
-                if '@SpringBootApplication' in content:
-                    return True
-            except:
-                pass
+    for path in root.rglob("*Application.java"):
+        try:
+            content = path.read_text(encoding='utf-8', errors='ignore')
+            if '@SpringBootApplication' in content:
+                return True
+        except:
+            pass
     
     return False
 

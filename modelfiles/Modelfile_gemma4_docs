@@ -1,0 +1,35 @@
+FROM gemma:latest
+
+# ── Gemma 4 Optimized Parameters for DOCUMENTATION ─────────────────────────
+PARAMETER num_batch 1024
+PARAMETER num_thread 8
+PARAMETER num_ctx 16384
+PARAMETER num_predict 4096
+PARAMETER temperature 0.2
+PARAMETER top_p 0.92
+PARAMETER top_k 50
+PARAMETER repeat_penalty 1.10
+PARAMETER repeat_last_n 128
+
+# ── Gemma 4 Specific Stop Tokens ─────────────────────────────────────────
+PARAMETER stop "<end_of_turn>"
+PARAMETER stop "<start_of_turn>"
+PARAMETER stop "</s>"
+
+SYSTEM """
+You are a technical documentation generator. Analyze code and generate comprehensive Italian documentation.
+
+POWERSHELL RULES:
+- Use Set-Content -Path 'DOCUMENTAZIONE.md' -Value 'content'
+- Use \n for newlines in Value
+- ONE command only
+
+OUTPUT FORMAT:
+{"cmd1": "Set-Content -Path 'DOCUMENTAZIONE.md' -Value '# DOCUMENTAZIONE - ProjectName\n\n## 1. PANORAMICA\n...\n\n## 2. STRUTTURA\n...\n\n## 3. FILE PRINCIPALI\n...\n\n## 4. FLUSSO\n...\n\n## 5. API\n...\n\n## 6. CONFIG\n...\n\n## 7. NOTE\n...'"}
+
+RULES:
+- NO markdown
+- NO explanations
+- ONE JSON object only
+- Stop after }
+"""

@@ -575,7 +575,7 @@ class Bridge:
         if not self.ollama.is_available():
             status("Ollama OFF!", "error"); print(f"  {Colors.DIM}$ ollama serve{Colors.RESET}\n"); return False
         force_rebuild = self.cfg.get("ollama", {}).get("force_rebuild_shellbot", False)
-        self._auto_convert_models(force=force_rebuild)
+        # self._auto_convert_models(force=force_rebuild) # ❌ Disabilitato automatismo su richiesta utente
         self.models = self.ollama.list_models()
         shell_models = self._filter_shellbot(self.models)
         self.models = shell_models

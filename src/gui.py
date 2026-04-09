@@ -129,9 +129,9 @@ class OllamaBridgeGUI:
         self.stop_flag = False  # Flag per stoppare inferenza
         self.thinking_anim = None
         
-        # Modelli specializzati
-        self.model_create = "phi4-mini-shellbot-create:latest"  # Per /new e /fix
-        self.model_docs = "phi4-mini-shellbot-docs:latest"      # Per /reverse
+        # Modelli specializzati (scoperti dinamicamente dopo connessione)
+        self.model_create = None
+        self.model_docs = None
         self.current_mode = "default"
 
         # Colori tema (VS Code dark)
@@ -173,7 +173,9 @@ class OllamaBridgeGUI:
         return f"{base}-shellbot" if base else ""
 
     def _filter_shellbot(self, models: list[str]) -> list[str]:
-        return [m for m in models if "shellbot" in m.lower()]
+        """Ritorna i modelli shellbot o quelli esplicitamente taggati per compiti specifici."""
+        keywords = ["shellbot", "create", "docs", "fix", "reverse"]
+        return [m for m in models if any(k in m.lower() for k in keywords)]
 
     def _command_style_from_env(self, env: dict) -> str:
         runner = (env or {}).get("runner", "")
@@ -665,6 +667,36 @@ class OllamaBridgeGUI:
         except Exception:
             pass
 
+    def _find_specialized_model(self, suffix: str):
+        """Cerca un modello shellbot con suffisso specifico tra quelli disponibili."""
+        if not self.models:
+            return None
+        # Priorità 1: modello con suffisso esatto legato a shellbot
+        for m in self.models:
+            ml = m.lower()
+            if f"shellbot-{suffix}" in ml or f"-shellbot-{suffix}" in ml:
+                return m
+        # Priorità 2: modello che contiene sia 'shellbot' che il suffisso
+        for m in self.models:
+            ml = m.lower()
+            if f"{suffix}" in ml and "shellbot" in ml:
+                return m
+        # Priorità 3: fallback su qualsiasi modello che contiene il suffisso (es. gemma4NewCreate)
+        for m in self.models:
+            ml = m.lower()
+            if suffix.lower() in ml:
+                return m
+        return None
+
+    def _discover_specialized_models(self):
+        """Scopri modelli specializzati create/docs tra quelli disponibili."""
+        self.model_create = self._find_specialized_model("create")
+        self.model_docs = self._find_specialized_model("docs")
+        if self.model_create:
+            self._add_message(f"🎯 Modello CREATE/FIX: {self.model_create}", "info")
+        if self.model_docs:
+            self._add_message(f"🎯 Modello DOCS/REVERSE: {self.model_docs}", "info")
+
     def _init_ollama(self):
         """Inizializza la connessione a Ollama."""
         def connect():
@@ -684,13 +716,21 @@ class OllamaBridgeGUI:
 
                 self.ollama = OllamaClient(base_url, model, timeout, options=ollama_options)
 
+                if not self.ollama.is_available():
+                    self.root.after(0, self._add_message, "⚠️ Ollama non disponibile, tentativo di avvio automatico...", "warning")
+                    success, msg = self.ollama.ensure_available()
+                    if not success:
+                        self.root.after(0, self._on_connection_failed, f"Ollama non avviabile: {msg}")
+                        return
+                    self.root.after(0, self._add_message, f"✅ Ollama avviato: {msg}", "success")
+
                 if self.ollama.is_available():
                     # Autoconversione in varianti shellBot prima di filtrare
                     force_rebuild = self.config.get("ollama", {}).get("force_rebuild_shellbot", False)
-                    self._auto_convert_models(force=force_rebuild)
-
+                    # self._auto_convert_models(force=force_rebuild) # ❌ Disabilitato automatismo su richiesta utente
+                    
                     all_models = self.ollama.list_models()
-                    shell_models = [m for m in all_models if "shellbot" in m.lower()]
+                    shell_models = self._filter_shellbot(all_models)
                     self.models = shell_models
                     if shell_models and self.ollama.model not in shell_models:
                         self.ollama.model = shell_models[0]
@@ -700,7 +740,7 @@ class OllamaBridgeGUI:
                 else:
                     self.root.after(0, self._on_connection_failed, "Ollama non risponde")
             except Exception as exc:
-                self.root.after(0, self._on_connection_failed, str(e))
+                self.root.after(0, self._on_connection_failed, str(exc))
 
         self._set_status("Connessione...", "warning")
         threading.Thread(target=connect, daemon=True).start()
@@ -713,6 +753,8 @@ class OllamaBridgeGUI:
 
         # Mostra banner di benvenuto CON LISTA MODELLI
         self._show_welcome_banner()
+        self._discover_specialized_models()
+        self._discover_specialized_models()
 
         # Popola lista modelli (TUTTI, non solo il conteggio)
         self.models_listbox.delete(0, tk.END)
@@ -899,10 +941,12 @@ class OllamaBridgeGUI:
 
         elif command == '/fix':
             self.mode = 'fix'
-            # Cambia modello per create/fix
-            if self.ollama and self.ollama.model != self.model_create:
-                self.ollama.model = self.model_create
-                self._add_message(f"🔄 Modello: {self.model_create} (CREATE/FIX)", "info")
+            tag = self.model_create or (self.models[0] if self.models else None)
+            if tag and self.ollama and self.ollama.model != tag:
+                self.ollama.model = tag
+                self._add_message(f"🔄 Modello: {tag} (CREATE/FIX)", "info")
+            elif not tag:
+                self._add_message("⚠️ Nessun modello shellbot CREATE trovato", "warning")
             self._add_message("🔧 Modalità FIX attivata", "success")
             self._add_message("  • Leggerà file esistenti prima di agire", "info")
             self._add_message("  • Non creerà README.md (usa claude.md)", "info")
@@ -911,10 +955,12 @@ class OllamaBridgeGUI:
 
         elif command == '/new':
             self.mode = 'new'
-            # Cambia modello per create/fix
-            if self.ollama and self.ollama.model != self.model_create:
-                self.ollama.model = self.model_create
-                self._add_message(f"🔄 Modello: {self.model_create} (CREATE/FIX)", "info")
+            tag = self.model_create or (self.models[0] if self.models else None)
+            if tag and self.ollama and self.ollama.model != tag:
+                self.ollama.model = tag
+                self._add_message(f"🔄 Modello: {tag} (CREATE/FIX)", "info")
+            elif not tag:
+                self._add_message("⚠️ Nessun modello shellbot CREATE trovato", "warning")
             self._add_message("🆕 Modalità NEW PROJECT attivata", "success")
             self._add_message("  • Può creare claude.md per tracciamento", "info")
             self._add_message("  • Struttura completa del progetto", "info")
@@ -1444,12 +1490,18 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
 
             try:
                 # ✅ ESTRAI PATH dal messaggio utente (per /fix o fix di progetto esistente)
-                path_match = re.search(r'(/[a-zA-Z0-9_./-]+)', user_message)
+                # path_match = re.search(r'(/[a-zA-Z0-9_./-]+)', user_message)
+                auto_path = self._extract_path_from_text(user_message)
                 project_path = None
-                if path_match:
-                    project_path = Path(path_match.group(1))
+                if auto_path:
+                    project_path = Path(auto_path)
                     if not project_path.exists():
                         project_path = None
+
+                # ✅ WORKFLOW AGENTICO INTERATIVO PER '/new'
+                if getattr(self, 'mode', 'default') == 'new':
+                    self._execute_agentic_workflow(user_message, project_path)
+                    return
 
                 # ✅ RILEVA MODALITÀ /reverse
                 is_reverse = "/reverse" in user_message.lower() or "reverse" in user_message.lower() or "documentazione" in user_message.lower()
@@ -1558,7 +1610,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
             except Exception as exc:
                 # Gestione errori dettagliata
                 error_msg = str(exc) if exc else "Errore sconosciuto"
-                error_type = type(e).__name__
+                error_type = type(exc).__name__
 
                 self.root.after(0, lambda: self._add_message(f"❌ Errore ({error_type}): {error_msg}", "error"))
 
@@ -1597,6 +1649,154 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
 
         threading.Thread(target=process, daemon=True).start()
 
+    def _execute_agentic_workflow(self, user_message, project_path):
+        """Esegue il workflow in due fasi: Pianificazione + Esecuzione Iterativa."""
+        try:
+            self.root.after(0, lambda: self._add_message("\n🧠 FASE 1: PIANIFICAZIONE ARCHITETTURALE...", "info"))
+            
+            # Usa gemma:latest (o fallback) per pianificare, NON il modello 'create' con i vincoli JSON
+            planner_model = self.config.get("ollama", {}).get("planner_model", "gemma:latest")
+            installed = [m for m in self.ollama.list_models()]
+            if planner_model not in installed and installed:
+                planner_model = installed[0] 
+                
+            original_model = self.ollama.model
+            self.ollama.model = planner_model
+            self.root.after(0, lambda: self._add_message(f"Uso {planner_model} per progettare...", "system"))
+            
+            plan_prompt = f"""Sei un software architect. Dividi questo progetto in massimo 3 o 4 piccoli step sequenziali. Non scrivere codice. Rispondi SOLO in Markdown strutturato esattamente in questo formato:
+
+# Sommario
+Breve descrizione funzionale del progetto.
+
+# Step 1
+Prima parte del lavoro.
+
+# Step 2
+Seconda parte del lavoro.
+
+Progetto richiesto: {user_message}"""
+            
+            plan_resp = ""
+            for chunk in self.ollama.chat([{"role": "user", "content": plan_prompt}], stream=True):
+                if self.stop_flag: break
+                plan_resp += chunk
+                
+            # Ripristina modello rigoroso
+            self.ollama.model = original_model
+            if self.stop_flag: return
+            
+            p_path = project_path or Path(".")
+            p_path.mkdir(parents=True, exist_ok=True)
+            try:
+                (p_path / "claude_plan.md").write_text(plan_resp, encoding="utf-8", errors="replace")
+                self.root.after(0, lambda: self._add_message(f"📝 Piano salvato in {p_path / 'claude_plan.md'}", "success"))
+            except Exception as e:
+                self.root.after(0, lambda: self._add_message(f"⚠️ Impossibile salvare claude_plan.md: {e}", "warning"))
+                
+            # Parsing del piano Markdown
+            import re
+            summary_match = re.search(r'# Sommario\n(.*?)(?=\n# Step)', plan_resp, re.DOTALL | re.IGNORECASE)
+            summary = summary_match.group(1).strip() if summary_match else ""
+            
+            steps = []
+            step_matches = re.finditer(r'# Step \d+(.*?)(?=\n# Step |\Z)', plan_resp, re.DOTALL | re.IGNORECASE)
+            for m in step_matches:
+                s = m.group(1).strip()
+                if s: steps.append(s)
+                
+            if not steps:
+                steps = [plan_resp] # fallback se formatta male
+                
+            self.root.after(0, lambda: self._add_message(f"\n🚀 FASE 2: ESECUZIONE DI {len(steps)} STEP CON {self.ollama.model}", "info"))
+            
+            for i, step_text in enumerate(steps, 1):
+                if self.stop_flag: break
+                self.root.after(0, lambda idx=i: self._add_message(f"\n▶──────── STEP {idx}/{len(steps)} ────────◀", "warning"))
+                
+                step_msg = f"""## PROGETTO (Contesto generale):
+{summary}
+
+## IL TUO TASK PER QUESTO STEP:
+{step_text}
+
+## REGOLE PER IL CODICE DEI FILE (IMPORTANTISSIMO):
+- Scrivi codice COMPLETO, ESTESO e FUNZIONANTE in base allo step attuale.
+- ASSOLUTAMENTE VIETATI I PLACEHOLDER (es. "inserisci logica qui").
+- Se crei CSS: usa design moderni, colori, layout completi (grid/flex), ombre e transizioni.
+- Se crei JS o Python: scrivi LA LOGICA INTERA prevista dallo step. (es. se è un Tris scrivi tutto il controllo vittoria, click, reset).
+- Abbonda coi dettagli nel codice. Il codice dentro "-Value '...'" deve contenere un vero file di livello production.
+
+PATH OBIETTIVO (rispetta questo path): '{p_path.absolute()}'
+Devi produrre ESATTAMENTE un file JSON valido!"""
+                
+                s_resp = ""
+                for chunk in self.ollama.chat([{"role": "user", "content": step_msg}], stream=True):
+                    if self.stop_flag: break
+                    s_resp += chunk
+                    
+                if self.stop_flag: break
+                
+                self.root.after(0, lambda l=len(s_resp): self._add_message(f"📝 JSON dallo step ({l} crt)", "system"))
+                
+                parsed = self.parser.parse(s_resp)
+                if parsed.is_valid and parsed.commands:
+                    for idx, cmd in enumerate(parsed.commands, 1):
+                        self.root.after(0, lambda c=cmd[:80]: self._add_message(f"⚙️ Eseguo: {c}...", "info"))
+                        
+                        cmd_str = cmd.strip()
+                        intercepted = False
+                        
+                        try:
+                            import re
+                            if cmd_str.startswith("New-Item") and "-ItemType Directory" in cmd_str:
+                                p_match = re.search(r"-Path\s+'(.*?)'", cmd_str)
+                                if p_match:
+                                    target_dir = Path(p_match.group(1))
+                                    target_dir.mkdir(parents=True, exist_ok=True)
+                                    self.root.after(0, lambda: self._add_message("   ✓ Directory creata (Python Native)", "success"))
+                                    intercepted = True
+                            
+                            elif cmd_str.startswith("Set-Content") or cmd_str.startswith("Add-Content"):
+                                p_match = re.search(r"-Path\s+'(.*?)'", cmd_str)
+                                v_match = re.search(r"-Value\s+'(.*)'\s*$", cmd_str, re.DOTALL)
+                                if p_match and v_match:
+                                    t_file = Path(p_match.group(1))
+                                    t_file.parent.mkdir(parents=True, exist_ok=True)
+                                    content = v_match.group(1)
+                                    content = content.replace("''", "'") # fix powershell escaping se presente
+                                    mode = 'a' if cmd_str.startswith("Add-Content") else 'w'
+                                    with open(t_file, mode, encoding='utf-8') as f:
+                                        f.write(content)
+                                    self.root.after(0, lambda m=mode: self._add_message(f"   ✓ File {'acceso' if m=='a' else 'scritto'} (Python Native)", "success"))
+                                    intercepted = True
+                        except Exception as e:
+                            self.root.after(0, lambda err=e: self._add_message(f"   ⚠️ Fallback nativo: {err}", "warning"))
+                            
+                        if not intercepted:
+                            ok, out = self.file_ops.execute_command(cmd)
+                            if ok:
+                                self.root.after(0, lambda: self._add_message("   ✓ Completato (Shell)", "success"))
+                            else:
+                                self.root.after(0, lambda e=out: self._add_message(f"   ✗ Errore Shell: {e}", "error"))
+                else:
+                    self.root.after(0, lambda err=parsed.error: self._add_message(f"❌ Errore parsing: {err}", "error"))
+                    self.root.after(0, lambda r=s_resp[:100]: self._add_message(f"Contenuto: {r}...", "warning"))
+            
+            self.root.after(0, lambda: self._add_message("\n🎉 PROGETTO COMPLETATO", "success"))
+            self.mode = 'default'
+            
+        except Exception as exc:
+            self.root.after(0, lambda e=str(exc): self._add_message(f"❌ ERRORE WORKFLOW: {e}", "error"))
+            
+        finally:
+            self.is_thinking = False
+            self.stop_flag = False
+            self.root.after(0, lambda: self.thinking_anim.stop())
+            self.root.after(0, lambda: self._set_status("● Connesso", "success"))
+            self.root.after(0, lambda: self.send_btn.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
+
     def _clear_chat(self):
         """Pulisce la chat e crea nuova sessione."""
         if messagebox.askyesno("Conferma", "Pulire la chat e iniziare nuova sessione?\n\nPerderai il contesto corrente."):
@@ -1614,6 +1814,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
 
             # Mostra di nuovo il banner con suggerimenti
             self._show_welcome_banner()
+        self._discover_specialized_models()
 
     def _new_session(self):
         """Crea una nuova sessione."""
@@ -1655,10 +1856,12 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
     def _cmd_reverse(self):
         self.input_field.delete("1.0", tk.END)
         self.input_field.insert("1.0", "/reverse")
-        # Cambia modello per documentazione
-        if self.ollama and self.ollama.model != self.model_docs:
-            self.ollama.model = self.model_docs
-            self._add_message(f"🔄 Modello: {self.model_docs} (DOCS/REVERSE)", "info")
+        tag = self.model_docs or (self.models[0] if self.models else None)
+        if tag and self.ollama and self.ollama.model != tag:
+            self.ollama.model = tag
+            self._add_message(f"🔄 Modello: {tag} (DOCS/REVERSE)", "info")
+        elif not tag:
+            self._add_message("⚠️ Nessun modello shellbot DOCS trovato", "warning")
         self._send_message()
 
     def _cmd_help(self):
