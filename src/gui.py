@@ -1664,16 +1664,18 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
             self.ollama.model = planner_model
             self.root.after(0, lambda: self._add_message(f"Uso {planner_model} per progettare...", "system"))
             
-            plan_prompt = f"""Sei un software architect. Dividi questo progetto in massimo 3 o 4 piccoli step sequenziali. Non scrivere codice. Rispondi SOLO in Markdown strutturato esattamente in questo formato:
+            plan_prompt = f"""Sei un software architect. Dividi questo progetto in piccoli step sequenziali (max 4).
+MOLTO IMPORTANTE: DEVI DEDICARE UN SOLO FILE PER OGNI STEP (es: Step 1 solo per index.html, Step 2 solo per style.css, Step 3 solo per script.js).
+Non scrivere codice in questa fase plan. Rispondi SOLO in Markdown strutturato esattamente in questo formato:
 
 # Sommario
 Breve descrizione funzionale del progetto.
 
 # Step 1
-Prima parte del lavoro.
+Descrivi la creazione del primo file (es. index.html) e tutte le sue logiche esatte.
 
 # Step 2
-Seconda parte del lavoro.
+Descrivi la creazione del secondo file (es. style.css) e il design specifico.
 
 Progetto richiesto: {user_message}"""
             
@@ -1720,15 +1722,13 @@ Progetto richiesto: {user_message}"""
 ## IL TUO TASK PER QUESTO STEP:
 {step_text}
 
-## REGOLE PER IL CODICE DEI FILE (IMPORTANTISSIMO):
-- Scrivi codice COMPLETO, ESTESO e FUNZIONANTE in base allo step attuale.
-- ASSOLUTAMENTE VIETATI I PLACEHOLDER (es. "inserisci logica qui").
-- Se crei CSS: usa design moderni, colori, layout completi (grid/flex), ombre e transizioni.
-- Se crei JS o Python: scrivi LA LOGICA INTERA prevista dallo step. (es. se è un Tris scrivi tutto il controllo vittoria, click, reset).
-- Abbonda coi dettagli nel codice. Il codice dentro "-Value '...'" deve contenere un vero file di livello production.
+## REGOLE E DIVIETI ASSOLUTI (IMPORTANTISSIMO):
+1. NOMI DEI FILE: Nel comando Powershell usa SOLO il NOME DEL FILE finale nel parametro -Path (es. -Path 'index.html' o -Path 'style.css'). NON usare MAI percorsi assoluti come 'C:/'.
+2. CODICE COMPLETO: Scrivi l'intero codice del file richiesto nello step. NON sintetizzare nulla. 
+3. NIENTE PLACEHOLDER: È ASSOLUTAMENTE VIETATO usare commenti come "// inserisci logica" o "/* styling */". Devi scrivere 100% della logica e dello stile. Se fai un gioco, deve avere CSS completo (layout, colori) e JS con tutte le funzioni finite.
+4. SINGOLO FILE: Questo step riguarda solo questo file, concentrati a farlo il più dettagliato possibile.
 
-PATH OBIETTIVO (rispetta questo path): '{p_path.absolute()}'
-Devi produrre ESATTAMENTE un file JSON valido!"""
+Devi produrre ESATTAMENTE un file JSON valido con comandi "Set-Content", contenenti l'intero codice nel "-Value" e SOLO il nome del file in "-Path" (es: -Path 'index.html')!"""
                 
                 s_resp = ""
                 for chunk in self.ollama.chat([{"role": "user", "content": step_msg}], stream=True):
@@ -1752,7 +1752,8 @@ Devi produrre ESATTAMENTE un file JSON valido!"""
                             if cmd_str.startswith("New-Item") and "-ItemType Directory" in cmd_str:
                                 p_match = re.search(r"-Path\s+'(.*?)'", cmd_str)
                                 if p_match:
-                                    target_dir = Path(p_match.group(1))
+                                    target_name = Path(p_match.group(1)).name
+                                    target_dir = p_path / target_name
                                     target_dir.mkdir(parents=True, exist_ok=True)
                                     self.root.after(0, lambda: self._add_message("   ✓ Directory creata (Python Native)", "success"))
                                     intercepted = True
@@ -1761,7 +1762,9 @@ Devi produrre ESATTAMENTE un file JSON valido!"""
                                 p_match = re.search(r"-Path\s+'(.*?)'", cmd_str)
                                 v_match = re.search(r"-Value\s+'(.*)'\s*$", cmd_str, re.DOTALL)
                                 if p_match and v_match:
-                                    t_file = Path(p_match.group(1))
+                                    # Usa solo il NOME del file estraendolo anche se il LLM sbaglia e mette path assoluti
+                                    file_name = Path(p_match.group(1).replace('\\', '/').split('/')[-1]).name
+                                    t_file = p_path / file_name
                                     t_file.parent.mkdir(parents=True, exist_ok=True)
                                     content = v_match.group(1)
                                     content = content.replace("''", "'") # fix powershell escaping se presente
