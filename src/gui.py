@@ -6,6 +6,7 @@ from tkinter import ttk, scrolledtext, messagebox, filedialog
 import threading
 import json
 import re
+import logging
 from pathlib import Path
 from datetime import datetime
 import time
@@ -13,10 +14,33 @@ import re
 import subprocess
 import shutil
 
+# Configura logging su file per la GUI
+LOG_DIR = Path("./logs")
+LOG_DIR.mkdir(exist_ok=True)
+
+def setup_gui_logging():
+    """Configura il logging su file per la GUI."""
+    log_file = LOG_DIR / f"gui_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    
+    # Crea handler file
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    
+    # Configura logger GUI
+    gui_logger = logging.getLogger('gui')
+    gui_logger.setLevel(logging.INFO)
+    gui_logger.addHandler(file_handler)
+    
+    return gui_logger
+
+logger = setup_gui_logging()
+
 from src.ollama_client import OllamaClient
 from src.session_manager import SessionManager
 from src.file_operations import FileOperations
 from src.command_parser import CommandParser
+from src.project_memory import ProjectMemory
 from src.project_scanner import (
     build_tree_from_paths,
     collect_candidate_files,
@@ -101,6 +125,7 @@ class OllamaBridgeGUI:
     """Interfaccia grafica Tkinter per Ollama Bridge."""
 
     def __init__(self, root):
+        logger.info("=== AVVIO GUI OLLAMA BRIDGE ===")
         self.root = root
         self.root.title("🦙 Ollama File System Bridge")
         self.root.geometry("1400x800")
@@ -109,6 +134,8 @@ class OllamaBridgeGUI:
         # Config
         self.config = self._load_config()
         self.state = self._load_state()
+        
+        logger.info(f"Configurazione caricata: {self.config.get('ollama', {}).get('base_url', 'default')}")
 
         # Client
         self.ollama = None
@@ -712,6 +739,7 @@ class OllamaBridgeGUI:
                     "top_k": 40,
                     "num_ctx": 16384,
                     "num_predict": 4096,
+                    "num_thread": 6,
                 }
 
                 self.ollama = OllamaClient(base_url, model, timeout, options=ollama_options)
@@ -728,12 +756,21 @@ class OllamaBridgeGUI:
                     # Autoconversione in varianti shellBot prima di filtrare
                     force_rebuild = self.config.get("ollama", {}).get("force_rebuild_shellbot", False)
                     # self._auto_convert_models(force=force_rebuild) # ❌ Disabilitato automatismo su richiesta utente
-                    
+
                     all_models = self.ollama.list_models()
+                    # Salva TUTTI i modelli, non solo shellbot
+                    self.models = all_models
                     shell_models = self._filter_shellbot(all_models)
-                    self.models = shell_models
-                    if shell_models and self.ollama.model not in shell_models:
-                        self.ollama.model = shell_models[0]
+                    
+                    # Se ci sono shellbot, usa il primo come default
+                    if shell_models:
+                        if self.ollama.model not in shell_models:
+                            self.ollama.model = shell_models[0]
+                    elif all_models:
+                        # Nessun shellbot: usa il primo disponibile
+                        if self.ollama.model not in all_models:
+                            self.ollama.model = all_models[0]
+                    
                     self.connected = True
                     self.session = self.session_manager.create_session()
                     self.root.after(0, self._on_connected)
@@ -754,18 +791,29 @@ class OllamaBridgeGUI:
         # Mostra banner di benvenuto CON LISTA MODELLI
         self._show_welcome_banner()
         self._discover_specialized_models()
-        self._discover_specialized_models()
 
-        # Popola lista modelli (TUTTI, non solo il conteggio)
+        # Popola lista modelli (TUTTI, non solo shellbot)
         self.models_listbox.delete(0, tk.END)
         if self.models:
-            self._add_message(f"📦 {len(self.models)} modelli shellBot:", "success")
+            shell_models = [m for m in self.models if "shellbot" in m.lower()]
+            if shell_models:
+                self._add_message(f"📦 {len(shell_models)} modelli shellBot su {len(self.models)} totali:", "success")
+            else:
+                self._add_message(f"📦 {len(self.models)} modelli disponibili (nessuno shellBot):", "warning")
+            
             for i, m in enumerate(self.models, 1):
-                prefix = "► " if m == self.ollama.model else f"{i}. "
+                is_shell = "shellbot" in m.lower()
+                is_active = m == self.ollama.model
+                if is_active:
+                    prefix = "► "
+                elif is_shell:
+                    prefix = f"🤖 {i}. "
+                else:
+                    prefix = f"   {i}. "
                 self.models_listbox.insert(tk.END, f"{prefix}{m}")
                 self._add_message(f"  {prefix}{m}", "model_list")
         else:
-            self._add_message("⚠️ Nessun modello shellBot trovato", "warning")
+            self._add_message("⚠️ Nessun modello disponibile", "warning")
 
         self.input_field.focus()
 
@@ -941,12 +989,20 @@ class OllamaBridgeGUI:
 
         elif command == '/fix':
             self.mode = 'fix'
-            tag = self.model_create or (self.models[0] if self.models else None)
-            if tag and self.ollama and self.ollama.model != tag:
-                self.ollama.model = tag
-                self._add_message(f"🔄 Modello: {tag} (CREATE/FIX)", "info")
-            elif not tag:
-                self._add_message("⚠️ Nessun modello shellbot CREATE trovato", "warning")
+            # NON cambiare modello se l'utente ha scelto un modello "full coder" come qwen3.5
+            current_model_lower = (self.ollama.model or "").lower()
+            is_full_coder = any(x in current_model_lower for x in ['qwen', 'coder', 'sushi'])
+            
+            if not is_full_coder:
+                tag = self.model_create or (self.models[0] if self.models else None)
+                if tag and self.ollama and self.ollama.model != tag:
+                    self.ollama.model = tag
+                    self._add_message(f"🔄 Modello: {tag} (CREATE/FIX)", "info")
+                elif not tag:
+                    self._add_message("⚠️ Nessun modello shellbot CREATE trovato", "warning")
+            else:
+                self._add_message(f"✅ Uso {self.ollama.model} (modelllo completo - pianifico + eseguo)", "info")
+            
             self._add_message("🔧 Modalità FIX attivata", "success")
             self._add_message("  • Leggerà file esistenti prima di agire", "info")
             self._add_message("  • Non creerà README.md (usa claude.md)", "info")
@@ -955,12 +1011,20 @@ class OllamaBridgeGUI:
 
         elif command == '/new':
             self.mode = 'new'
-            tag = self.model_create or (self.models[0] if self.models else None)
-            if tag and self.ollama and self.ollama.model != tag:
-                self.ollama.model = tag
-                self._add_message(f"🔄 Modello: {tag} (CREATE/FIX)", "info")
-            elif not tag:
-                self._add_message("⚠️ Nessun modello shellbot CREATE trovato", "warning")
+            # NON cambiare modello se l'utente ha scelto un modello "full coder" come qwen3.5
+            current_model_lower = (self.ollama.model or "").lower()
+            is_full_coder = any(x in current_model_lower for x in ['qwen', 'coder', 'sushi'])
+            
+            if not is_full_coder:
+                tag = self.model_create or (self.models[0] if self.models else None)
+                if tag and self.ollama and self.ollama.model != tag:
+                    self.ollama.model = tag
+                    self._add_message(f"🔄 Modello: {tag} (CREATE/FIX)", "info")
+                elif not tag:
+                    self._add_message("⚠️ Nessun modello shellbot CREATE trovato", "warning")
+            else:
+                self._add_message(f"✅ Uso {self.ollama.model} (modelllo completo - pianifico + eseguo)", "info")
+            
             self._add_message("🆕 Modalità NEW PROJECT attivata", "success")
             self._add_message("  • Può creare claude.md per tracciamento", "info")
             self._add_message("  • Struttura completa del progetto", "info")
@@ -1649,9 +1713,459 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
 
         threading.Thread(target=process, daemon=True).start()
 
+    def _execute_direct_workflow(self, user_message, project_path):
+        """Workflow a 2 fasi con memoria di progetto per coerenza tra step."""
+        try:
+            logger.info(f"=== INIZIO WORKFLOW CON MEMORIA ===")
+            logger.info(f"Modello planner: {self.ollama.model}")
+            logger.info(f"User message: {user_message[:200]}")
+            logger.info(f"Project path: {project_path}")
+            
+            self.root.after(0, lambda: self._add_message("\n🧠 FASE 1: PIANIFICAZIONE CON MEMORIA...", "info"))
+            
+            # Costruisci il path del progetto
+            p_path = project_path or Path(".")
+            p_path.mkdir(parents=True, exist_ok=True)
+            
+            # Inizializza memoria di progetto
+            memory = ProjectMemory(p_path)
+            memory.clear()  # Pulisci memoria precedente
+            
+            # Estrai info dal messaggio utente
+            project_name = "Progetto"
+            if "tris" in user_message.lower():
+                project_name = "Gioco del Tris"
+            elif "calcolatrice" in user_message.lower():
+                project_name = "Calcolatrice"
+            
+            memory.set_project_info(project_name, user_message[:200])
+            logger.info(f"Memoria inizializzata per: {project_name}")
+            
+            # Prompt SOLO per pianificazione - SENZA codice, SOLO contratti
+            plan_prompt = f"""Sei un software architect senior. Il tuo compito è creare un PIANO ARCHITETTURALE con CONTRATTI tra file.
+
+⚠️ REGOLE ASSOLUTE:
+- ❌ VIETATO scrivere codice in qualsiasi forma
+- ❌ VIETATO scrivere frammenti CSS, JS, HTML
+- ❌ VIETATO scrivere comandi PowerShell
+- ✅ SCRIVI SOLO descrizioni testuali di COSA deve contenere ogni file
+- ✅ DEFINISCI i contratti: ID, classi, nomi funzioni che i file si scambiano
+
+PROGETTO: {user_message}
+
+FORMATO OUTPUT RICHIESTO:
+
+## Descrizione Progetto
+[2-3 righe che spiegano COSA fa l'applicazione]
+
+## File Da Creare
+
+### index.html
+Scopo: [descrizione verbale dello scopo]
+Elementi richiesti:
+- Container principale con ID "app" o "game-container"
+- Griglia 3x3 con 9 celle, ognuna con classe "cell" e data-index da 0 a 8
+- Display stato con ID "status" che mostra il turno corrente
+- Bottone reset con ID "reset-btn"
+- Link a style.css nel <head>
+- Link a script.js prima di </body>
+NON scrivere: codice HTML, tag, attributi completi
+
+### style.css
+Scopo: [descrizione verbale]
+Elementi da stilizzare:
+- Selettore: .cell (100px, flexbox per centrare, bordo, hover effect)
+- Selettore: #status (font grande, colore)
+- Selettore: #reset-btn (padding, background, hover)
+- Layout: grid 3x3 per il board
+NON scrivere: regole CSS complete, valori esatti
+
+### script.js
+Scopo: [descrizione verbale]
+Variabili globali:
+- board: array di 9 elementi
+- currentPlayer: 'X' o 'O'
+- gameActive: boolean
+Funzioni richieste:
+- handleCellClick(event): gestisce click su cella
+- checkResult(): controlla vittoria/pareggio
+- resetGame(): resetta stato
+ID da referenziare: #status, #reset-btn
+Classi da manipolare: .cell, .cell.x, .cell.o
+NON scrivere: implementazione funzioni, codice JS
+
+## Contratto tra file
+- index.html ESPONE: #status, #reset-btn, .cell[data-index]
+- style.css STILIZZA: .cell, #status, #reset-btn
+- script.js MANIPOLA: #status.textContent, .cell.classList, #reset-btn.addEventListener
+
+Genera ORA il piano per: {user_message}"""
+
+            self.root.after(0, lambda: self._add_message("\n📝 Generazione piano...", "info"))
+            
+            plan_resp = ""
+            for chunk in self.ollama.chat([{"role": "user", "content": plan_prompt}], stream=True):
+                if self.stop_flag:
+                    break
+                plan_resp += chunk
+            
+            if self.stop_flag:
+                return
+            
+            # Salva il piano
+            plan_file = p_path / "claude_plan.md"
+            plan_file.write_text(plan_resp, encoding="utf-8", errors="replace")
+            logger.info(f"Piano salvato")
+            self.root.after(0, lambda: self._add_message(f"📝 Piano salvato", "success"))
+            
+            # Estrai nomi file dal piano
+            import re
+            file_patterns = {
+                'index.html': r'(?:index\.html|html)',
+                'style.css': r'(?:style\.css|css)',
+                'script.js': r'(?:script\.js|js)'
+            }
+            
+            steps = []
+            for filename, pattern in file_patterns.items():
+                if re.search(pattern, plan_resp, re.IGNORECASE):
+                    steps.append(filename)
+            
+            if not steps:
+                steps = ['index.html', 'style.css', 'script.js']  # Default per web projects
+            
+            logger.info(f"Step da eseguire: {steps}")
+            
+            # FASE 2: Esecuzione con memoria
+            self.root.after(0, lambda: self._add_message(f"\n🚀 FASE 2: ESECUZIONE {len(steps)} FILE", "info"))
+            
+            # File creati con successo
+            created_files = []
+            
+            for i, filename in enumerate(steps, 1):
+                if self.stop_flag:
+                    break
+                    
+                # Ottieni memoria attuale da iniettare
+                memory_context = memory.get_memory_summary()
+                
+                # Prompt per esecutore CON memoria - PIÙ STRINGENTE
+                step_msg = f"""## PROGETTO: {project_name}
+
+{memory_context}
+
+## STEP {i}/{len(steps)}: CREA {filename}
+
+Contesto dal piano:
+{plan_resp[:1000]}
+
+## ⚠️ REGOLE CRITICHE:
+1. CREA SOLO {filename} - NON altri file
+2. {filename} DEVE essere un file SEPARATO
+3. Se {filename} == "index.html":
+   - VIETATO <style>...</style> inline
+   - VIETATO <script>...</script> inline
+   - OBBLIGATORIO <link rel="stylesheet" href="style.css">
+   - OBBLIGATORIO <script src="script.js"></script>
+4. Se {filename} == "style.css":
+   - SOLO regole CSS, NIENTE HTML o JS
+   - Usa selettori: .cell, #status, #reset-btn
+5. Se {filename} == "script.js":
+   - SOLO codice JavaScript, NIENTE HTML o CSS
+   - Usa getElementById("status"), getElementById("reset-btn")
+   - Usa querySelectorAll(".cell")
+6. Codice COMPLETO e FUNZIONANTE
+7. NO placeholder, NO "// ..."
+
+## FORMATO OUTPUT - SOLO JSON:
+{{"cmd1": "Set-Content -Path '{filename}' -Value 'contenuto'"}}
+
+⚠️ IMPORTANTE:
+- Le virgolette singole ' nel contenuto vanno escapate come ''
+- Le newline vanno come \\n
+- NON includere altri file nel JSON
+
+Genera ORA il JSON per {filename}:"""
+                
+                self.root.after(0, lambda fn=filename, idx=i: self._add_message(f"\n▶ STEP {idx}: {fn}", "warning"))
+                
+                # Chiama LLM con retry
+                max_retries = 2
+                success = False
+                
+                for attempt in range(max_retries + 1):
+                    if self.stop_flag:
+                        break
+                    
+                    response = ""
+                    for chunk in self.ollama.chat([{"role": "user", "content": step_msg}], stream=True):
+                        if self.stop_flag:
+                            break
+                        response += chunk
+                    
+                    if self.stop_flag:
+                        break
+                    
+                    # Estrai JSON
+                    json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                    if json_match:
+                        parsed = self.parser.parse(json_match.group(0))
+                        if parsed.is_valid and parsed.commands:
+                            # Esegui comandi
+                            for cmd in parsed.commands:
+                                ok = self._execute_command_with_fallback(cmd, p_path, filename)
+                                if ok:
+                                    # Aggiorna memoria
+                                    self._update_memory_from_file(memory, filename, response)
+                                    created_files.append(filename)
+                                    self.root.after(0, lambda fn=filename: self._add_message(f"✓ {fn} creato", "success"))
+                                    success = True
+                                    break
+                                else:
+                                    self.root.after(0, lambda: self._add_message("✗ Errore esecuzione", "error"))
+                        
+                        if success:
+                            break
+                        else:
+                            if attempt < max_retries:
+                                logger.warning(f"Retry {attempt+1} per {filename}")
+                                self.root.after(0, lambda a=attempt+1: self._add_message(f"🔄 Retry {a}...", "warning"))
+                                step_msg += "\n\n⚠️ RISPOSTA PRECEDENTE NON VALIDA! Riprova con JSON corretto."
+                    else:
+                        if attempt < max_retries:
+                            logger.warning(f"Nessun JSON trovato, retry {attempt+1}")
+                            self.root.after(0, lambda a=attempt+1: self._add_message(f"🔄 Retry {a}...", "warning"))
+                            step_msg += "\n\n⚠️ NON hai generato JSON! Rispondi SOLO con JSON."
+                
+                if not success:
+                    logger.error(f"Fallito creazione {filename} dopo {max_retries+1} tentativi")
+                    self.root.after(0, lambda fn=filename: self._add_message(f"✗ {fn} FALLITO", "error"))
+            
+            # VALIDAZIONE FINALE
+            logger.info(f"File creati: {created_files}")
+            required_files = ['index.html', 'style.css', 'script.js']
+            missing = [f for f in required_files if f not in created_files]
+            
+            if missing:
+                self.root.after(0, lambda m=missing: self._add_message(f"⚠️ File mancanti: {', '.join(m)}", "warning"))
+                self.root.after(0, lambda: self._add_message("🔄 Tentativo recupero...", "info"))
+                
+                # Retry per file mancanti
+                for missing_file in missing:
+                    retry_msg = f"""## RECUPERO FILE MANCANTE: {missing_file}
+
+Il progetto NON funziona senza {missing_file}!
+
+{memory.get_memory_summary()}
+
+## REGOLE:
+- Se {missing_file} == "style.css": SOLO CSS, selettori .cell, #status, #reset-btn
+- Se {missing_file} == "index.html": SOLO HTML con <link href="style.css"> e <script src="script.js">
+- Se {missing_file} == "script.js": SOLO JS con getElementById e querySelectorAll
+
+Genera SOLO JSON: {{"cmd1": "Set-Content -Path '{missing_file}' -Value '...'"}}"""
+                    
+                    retry_resp = ""
+                    for chunk in self.ollama.chat([{"role": "user", "content": retry_msg}], stream=True):
+                        if self.stop_flag:
+                            break
+                        retry_resp += chunk
+                    
+                    if retry_resp:
+                        json_match = re.search(r'\{.*\}', retry_resp, re.DOTALL)
+                        if json_match:
+                            parsed = self.parser.parse(json_match.group(0))
+                            if parsed.is_valid and parsed.commands:
+                                for cmd in parsed.commands:
+                                    ok = self._execute_command_with_fallback(cmd, p_path, missing_file)
+                                    if ok:
+                                        created_files.append(missing_file)
+                                        self.root.after(0, lambda fn=missing_file: self._add_message(f"✓ {fn} recuperato!", "success"))
+            
+            memory.save()
+            logger.info(f"=== WORKFLOW COMPLETATO - File: {created_files} ===")
+            self.root.after(0, lambda: self._add_message("\n🎉 PROGETTO COMPLETATO", "success"))
+            self.mode = 'default'
+            
+        except Exception as exc:
+            logger.error(f"ERRORE: {exc}")
+            self.root.after(0, lambda e=str(exc): self._add_message(f"❌ ERRORE: {e}", "error"))
+        
+        finally:
+            self.is_thinking = False
+            self.stop_flag = False
+            self.root.after(0, lambda: self.thinking_anim.stop())
+            self.root.after(0, lambda: self._set_status("● Connesso", "success"))
+            self.root.after(0, lambda: self.send_btn.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
+
+    def _execute_command_with_fallback(self, cmd: str, p_path: Path, filename: str) -> bool:
+        """Esegue comando con fallback Python nativo e VALIDAZIONE contenuto."""
+        try:
+            import re
+            cmd_str = cmd.strip()
+            
+            if cmd_str.startswith("Set-Content") or cmd_str.startswith("Add-Content"):
+                p_match = re.search(r"-Path\s+'([^']*)'", cmd_str)
+                if not p_match:
+                    p_match = re.search(r"-Path\s+\"([^\"]*)\"", cmd_str)
+                
+                v_start = cmd_str.find("-Value ")
+                if v_start == -1:
+                    v_start = cmd_str.find("-Value\t")
+                
+                if p_match and v_start != -1:
+                    value_start_pos = v_start + 7
+                    while value_start_pos < len(cmd_str) and cmd_str[value_start_pos] in ' \t':
+                        value_start_pos += 1
+                    
+                    if value_start_pos < len(cmd_str):
+                        quote_char = cmd_str[value_start_pos]
+                        if quote_char in ("'", '"'):
+                            content_start = value_start_pos + 1
+                            content_end = cmd_str.rfind(quote_char)
+                            if content_end > content_start:
+                                content = cmd_str[content_start:content_end]
+                                
+                                if quote_char == "'":
+                                    content = content.replace("''", "'")
+                                elif quote_char == '"':
+                                    content = content.replace('\\"', '"')
+                                
+                                content = content.replace('\\n', '\n').replace('\\t', '\t')
+                                
+                                # === VALIDAZIONE CRITICA ===
+                                validation = self._validate_file_content(filename, content)
+                                if not validation['valid']:
+                                    logger.error(f"❌ VALIDAZIONE FALLITA per {filename}: {validation['reason']}")
+                                    return False
+                                # =========================
+                                
+                                t_file = p_path / Path(p_match.group(1)).name
+                                t_file.parent.mkdir(parents=True, exist_ok=True)
+                                mode = 'a' if cmd_str.startswith("Add-Content") else 'w'
+                                with open(t_file, mode, encoding='utf-8') as f:
+                                    f.write(content)
+                                logger.info(f"✅ File creato: {t_file.name} ({len(content)} bytes)")
+                                return True
+            
+            # Fallback a shell
+            ok, out = self.file_ops.execute_command(cmd)
+            return ok
+        except Exception as e:
+            logger.error(f"Errore esecuzione: {e}")
+            return False
+    
+    def _validate_file_content(self, filename: str, content: str) -> dict:
+        """Valida che il contenuto del file sia valido e NON un placeholder."""
+        stripped = content.strip()
+        
+        # Controllo 1: contenuto non vuoto/minimo
+        if len(stripped) < 20:
+            return {'valid': False, 'reason': f'Contenuto troppo corto ({len(stripped)} chars)'}
+        
+        # Controllo 2: NO placeholder
+        if stripped in ['...', '...', 'TODO', 'fixme']:
+            return {'valid': False, 'reason': 'Contenuto è un placeholder'}
+        
+        if '...' in stripped and len(stripped) < 100:
+            return {'valid': False, 'reason': 'Contiene "..." come placeholder'}
+        
+        # Controllo 3: validazione per tipo file
+        ext = filename.lower().split('.')[-1] if '.' in filename else ''
+        
+        if ext == 'html':
+            if '<html' not in stripped.lower() and '<!doctype' not in stripped.lower():
+                return {'valid': False, 'reason': 'HTML: manca tag <html> o <!DOCTYPE>'}
+            if 'style.css' not in stripped.lower():
+                return {'valid': False, 'reason': 'HTML: manca link a style.css'}
+            if 'script.js' not in stripped.lower():
+                return {'valid': False, 'reason': 'HTML: manca script src="script.js"'}
+            if '<style>' in stripped.lower():
+                return {'valid': False, 'reason': 'HTML: CSS inline non permesso'}
+            if '<script>' in stripped.lower() and 'src=' not in stripped.lower():
+                return {'valid': False, 'reason': 'HTML: JS inline non permesso'}
+        
+        elif ext == 'css':
+            if '{' not in content or '}' not in content:
+                return {'valid': False, 'reason': 'CSS: mancano parentesi graffe'}
+        
+        elif ext == 'js':
+            if 'function' not in stripped.lower() and '=>' not in stripped:
+                return {'valid': False, 'reason': 'JS: manca almeno una funzione'}
+        
+        return {'valid': True, 'reason': 'OK'}
+
+    def _update_memory_from_file(self, memory: ProjectMemory, filename: str, response: str):
+        """Aggiorna memoria basandosi sul file creato."""
+        import re
+        
+        # Estrai il contenuto effettivo dal JSON response
+        content = ""
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            # Cerca il Value nel comando
+            value_match = re.search(r"-Value\s+'(.+)'", json_match.group(0), re.DOTALL)
+            if value_match:
+                content = value_match.group(1)
+                # Unescape
+                content = content.replace("''", "'").replace('\\n', '\n')
+        
+        if not content:
+            content = response  # Fallback
+        
+        if filename == 'index.html':
+            ids = re.findall(r'id=["\']([^"\']+)["\']', content)
+            classes = re.findall(r'class=["\']([^"\']+)["\']', content)
+            has_css_link = bool(re.search(r'<link.*stylesheet.*href=["\']style\.css["\']', content))
+            has_js_link = bool(re.search(r'<script.*src=["\']script\.js["\']', content))
+            has_inline_style = bool(re.search(r'<style>.*</style>', content, re.DOTALL))
+            has_inline_script = bool(re.search(r'<script>(?!.*src=).*?</script>', content, re.DOTALL))
+            
+            memory.register_file(filename, "Struttura HTML", {
+                "ids": ids,
+                "classes": classes,
+                "has_css_link": [str(has_css_link)],
+                "has_js_link": [str(has_js_link)],
+                "has_inline_style": [str(has_inline_style)],
+                "has_inline_script": [str(has_inline_script)]
+            })
+            
+            if has_inline_style or has_inline_script:
+                logger.warning(f"⚠️ {filename} contiene CSS/JS inline!")
+                memory.add_decision(f"ATTENZIONE: {filename} ha codice inline invece di file separati")
+                
+        elif filename == 'style.css':
+            selectors = re.findall(r'([.#][a-zA-Z0-9_-]+)\s*\{', content)
+            memory.register_file(filename, "Stili CSS", {
+                "selectors": selectors
+            })
+            
+        elif filename == 'script.js':
+            functions = re.findall(r'function\s+([a-zA-Z0-9_]+)', content)
+            variables = re.findall(r'(?:let|const|var)\s+([a-zA-Z0-9_]+)', content)
+            used_ids = re.findall(r'getElementById\(["\']([^"\']+)["\']\)', content)
+            used_classes = re.findall(r'(?:querySelectorAll|querySelector)\(["\']([^"\']+)["\']\)', content)
+            memory.register_file(filename, "Logica JavaScript", {
+                "functions": functions,
+                "variables": variables,
+                "used_ids": used_ids,
+                "used_classes": used_classes
+            })
+
     def _execute_agentic_workflow(self, user_message, project_path):
         """Esegue il workflow in due fasi: Pianificazione + Esecuzione Iterativa."""
         try:
+            # VERIFICA se il modello corrente è un modello "coder" completo (qwen3.5, ecc.)
+            # Se sì, salta il workflow agentic e usa il modello COME esecutore diretto
+            current_model_lower = self.ollama.model.lower()
+            is_full_coder = any(x in current_model_lower for x in ['qwen', 'coder', 'sushi'])
+            
+            if is_full_coder:
+                # ✅ USA QWEN3.5 COME PIANIFICATORE + ESECUTORE
+                return self._execute_direct_workflow(user_message, project_path)
+            
+            # Altrimenti usa il workflow agentic classico (pianificatore + esecutore separati)
             self.root.after(0, lambda: self._add_message("\n🧠 FASE 1: PIANIFICAZIONE ARCHITETTURALE...", "info"))
             
             # Usa gemma:latest (o fallback) per pianificare, NON il modello 'create' con i vincoli JSON
@@ -1664,18 +2178,30 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
             self.ollama.model = planner_model
             self.root.after(0, lambda: self._add_message(f"Uso {planner_model} per progettare...", "system"))
             
-            plan_prompt = f"""Sei un software architect. Dividi questo progetto in piccoli step sequenziali (max 4).
-MOLTO IMPORTANTE: DEVI DEDICARE UN SOLO FILE PER OGNI STEP (es: Step 1 solo per index.html, Step 2 solo per style.css, Step 3 solo per script.js).
-Non scrivere codice in questa fase plan. Rispondi SOLO in Markdown strutturato esattamente in questo formato:
+            plan_prompt = f"""Sei un software architect. Dividi questo progetto in piccoli step sequenziali (max 5).
+
+REGOLA FONDAMENTALE:
+- DEVI DEDICARE UN SOLO FILE PER OGNI STEP (es: Step 1 solo per index.html, Step 2 solo per style.css, Step 3 solo per script.js).
+- OGNI step DEVE menzionare ESPlicitamente il nome del file con il formato: `nomefile.estensione` (con backticks!)
+- DESCRIVI il contenuto dettagliato di ogni file, NON solo la struttura generale.
+- ⚠️ IMPORTANTE: Per progetti WEB, devi avere ESATTAMENTE 3 step:
+  Step 1: `index.html` - con <link rel="stylesheet" href="style.css"> e <script src="script.js"></script>
+  Step 2: `style.css` - con tutti gli stili (layout, colori, hover, responsive)
+  Step 3: `script.js` - con tutta la logica (eventi, funzioni, condizioni)
+
+Rispondi SOLO in Markdown strutturato esattamente in questo formato:
 
 # Sommario
-Breve descrizione funzionale del progetto.
+Breve descrizione funzionale del progetto (2-3 righe).
 
 # Step 1
-Descrivi la creazione del primo file (es. index.html) e tutte le sue logiche esatte.
+Creazione del file `index.html`. Descrivi ESATTAMENTE cosa deve contenere: struttura HTML, elementi DOM, collegamenti a CSS/JS.
 
 # Step 2
-Descrivi la creazione del secondo file (es. style.css) e il design specifico.
+Creazione del file `style.css`. Descrivi gli stili completi: layout, colori, tipografia, responsive design.
+
+# Step 3
+Creazione del file `script.js`. Descrivi la logica completa: variabili, funzioni, event handler, condizioni.
 
 Progetto richiesto: {user_message}"""
             
@@ -1716,19 +2242,60 @@ Progetto richiesto: {user_message}"""
                 if self.stop_flag: break
                 self.root.after(0, lambda idx=i: self._add_message(f"\n▶──────── STEP {idx}/{len(steps)} ────────◀", "warning"))
                 
+                # Migliora il testo dello step per essere PIÙ specifico sul file da creare
+                # Estrai il nome file dal testo dello step
+                import re
+                file_match = re.search(r'`([a-zA-Z0-9_.-]+)`', step_text)
+                file_name = file_match.group(1) if file_match else "il file richiesto"
+                
+                # Estrai l'estensione per capire il tipo
+                ext = file_name.split('.')[-1].lower() if '.' in file_name else ""
+                file_type_map = {
+                    'html': 'HTML strutturato con link a CSS/JS',
+                    'css': 'CSS con stili completi (layout, colori, hover)',
+                    'js': 'JavaScript con logica completa (eventi, funzioni, condizioni)',
+                    'py': 'Python con codice funzionante',
+                    'java': 'Java con classi complete'
+                }
+                file_desc = file_type_map.get(ext, 'codice completo')
+                
+                # Messaggi specifici in base al tipo di file
+                extra_rules = ""
+                if ext == 'html':
+                    extra_rules = "\n⚠️ DEVI INCLUDERE: <link rel='stylesheet' href='style.css'> E <script src='script.js'></script>"
+                elif ext == 'css':
+                    extra_rules = "\n⚠️ DEVI INCLUDERE: tutti gli stili (body, container, elementi, hover, responsive)"
+                elif ext == 'js':
+                    extra_rules = "\n⚠️ DEVI INCLUDERE: event listeners, funzioni principali, logica di gioco/app"
+                
                 step_msg = f"""## PROGETTO (Contesto generale):
 {summary}
 
-## IL TUO TASK PER QUESTO STEP:
+## STEP {i}/{len(steps)} - DEVI CREARE QUESTO FILE: {file_name}
 {step_text}
 
-## REGOLE E DIVIETI ASSOLUTI (IMPORTANTISSIMO):
-1. NOMI DEI FILE: Nel comando Powershell usa SOLO il NOME DEL FILE finale nel parametro -Path (es. -Path 'index.html' o -Path 'style.css'). NON usare MAI percorsi assoluti come 'C:/'.
-2. CODICE COMPLETO: Scrivi l'intero codice del file richiesto nello step. NON sintetizzare nulla. 
-3. NIENTE PLACEHOLDER: È ASSOLUTAMENTE VIETATO usare commenti come "// inserisci logica" o "/* styling */". Devi scrivere 100% della logica e dello stile. Se fai un gioco, deve avere CSS completo (layout, colori) e JS con tutte le funzioni finite.
-4. SINGOLO FILE: Questo step riguarda solo questo file, concentrati a farlo il più dettagliato possibile.
+## ISTRUZIONI PER CREARE {file_name}:
+- Tipo file: {file_desc}
+- Path: usa SOLO il nome '{file_name}' nel parametro -Path
+- Formato: Set-Content -Path '{file_name}' -Value 'codice_completo'
+{extra_rules}
 
-Devi produrre ESATTAMENTE un file JSON valido con comandi "Set-Content", contenenti l'intero codice nel "-Value" e SOLO il nome del file in "-Path" (es: -Path 'index.html')!"""
+## REGOLE CRUCIALI:
+1. ✅ File DA CREARE: {file_name} (NON altri file!)
+2. ✅ CODICE COMPLETO: NO placeholder, NO '// ...', NO '/* insert code */'
+3. ✅ NEWLINE: usa \\n per andare a capo nel Value
+4. ✅ VIRGOLETTE: se il codice ha ' (apice singolo), escapalo con '' (doppio apice)
+5. ✅ PARENTESI graffe {{ }} nel CSS/JS VANNO BENISSIMO - NON escaparle!
+6. ❌ NON creare file diversi da {file_name}
+7. ❌ NON usare cat << EOF (è sintassi bash, non PowerShell!)
+8. ❌ NON saltare newline - ogni riga deve essere separata da \\n
+9. ⚠️ Il file DEVE essere COMPLETO e FUNZIONANTE da solo
+
+## ESEMPIO CORRETTO per {file_name}:
+Set-Content -Path '{file_name}' -Value 'riga 1\\nriga 2 {{ con parentesi }}\\nriga 3'
+
+## OUTPUT RICHIESTO:
+JSON con UNA SOLA chiave cmd1 (o più se necessario) contenente il comando Set-Content per {file_name}."""
                 
                 s_resp = ""
                 for chunk in self.ollama.chat([{"role": "user", "content": step_msg}], stream=True):
@@ -1759,20 +2326,52 @@ Devi produrre ESATTAMENTE un file JSON valido con comandi "Set-Content", contene
                                     intercepted = True
                             
                             elif cmd_str.startswith("Set-Content") or cmd_str.startswith("Add-Content"):
-                                p_match = re.search(r"-Path\s+'(.*?)'", cmd_str)
-                                v_match = re.search(r"-Value\s+'(.*)'\s*$", cmd_str, re.DOTALL)
-                                if p_match and v_match:
-                                    # Usa solo il NOME del file estraendolo anche se il LLM sbaglia e mette path assoluti
-                                    file_name = Path(p_match.group(1).replace('\\', '/').split('/')[-1]).name
-                                    t_file = p_path / file_name
-                                    t_file.parent.mkdir(parents=True, exist_ok=True)
-                                    content = v_match.group(1)
-                                    content = content.replace("''", "'") # fix powershell escaping se presente
-                                    mode = 'a' if cmd_str.startswith("Add-Content") else 'w'
-                                    with open(t_file, mode, encoding='utf-8') as f:
-                                        f.write(content)
-                                    self.root.after(0, lambda m=mode: self._add_message(f"   ✓ File {'acceso' if m=='a' else 'scritto'} (Python Native)", "success"))
-                                    intercepted = True
+                                # Estrai Path
+                                p_match = re.search(r"-Path\s+'([^']*)'", cmd_str)
+                                if not p_match:
+                                    p_match = re.search(r"-Path\s+\"([^\"]*)\"", cmd_str)
+                                
+                                # Estrai Value - APPROCCIO MIGLIORATO
+                                # Trova l'inizio di -Value
+                                v_start = cmd_str.find("-Value ")
+                                if v_start == -1:
+                                    v_start = cmd_str.find("-Value\t")
+                                
+                                if p_match and v_start != -1:
+                                    # Estrai tutto dopo -Value
+                                    value_start_pos = v_start + 7  # salta "-Value "
+                                    # Skip whitespace
+                                    while value_start_pos < len(cmd_str) and cmd_str[value_start_pos] in ' \t':
+                                        value_start_pos += 1
+                                    
+                                    # Determina il delimitatore (singola o doppia virgoletta)
+                                    if value_start_pos < len(cmd_str):
+                                        quote_char = cmd_str[value_start_pos]
+                                        if quote_char in ("'", '"'):
+                                            # Trova la virgoletta di chiusura (ultima della stringa)
+                                            content_start = value_start_pos + 1
+                                            # Cerca l'ULTIMA occorrenza della stessa virgoletta
+                                            content_end = cmd_str.rfind(quote_char)
+                                            if content_end > content_start:
+                                                content = cmd_str[content_start:content_end]
+                                                # Fix escaped quotes
+                                                if quote_char == "'":
+                                                    content = content.replace("''", "'")
+                                                elif quote_char == '"':
+                                                    content = content.replace('\\"', '"')
+                                                
+                                                # Fix newlines e tabs
+                                                content = content.replace('\\n', '\n').replace('\\t', '\t')
+                                                
+                                                # Usa solo il NOME del file
+                                                file_name = Path(p_match.group(1).replace('\\', '/').split('/')[-1]).name
+                                                t_file = p_path / file_name
+                                                t_file.parent.mkdir(parents=True, exist_ok=True)
+                                                mode = 'a' if cmd_str.startswith("Add-Content") else 'w'
+                                                with open(t_file, mode, encoding='utf-8') as f:
+                                                    f.write(content)
+                                                self.root.after(0, lambda m=mode: self._add_message(f"   ✓ File {'acceso' if m=='a' else 'scritto'} (Python Native)", "success"))
+                                                intercepted = True
                         except Exception as e:
                             self.root.after(0, lambda err=e: self._add_message(f"   ⚠️ Fallback nativo: {err}", "warning"))
                             
@@ -1830,20 +2429,30 @@ Devi produrre ESATTAMENTE un file JSON valido con comandi "Set-Content", contene
         if self.ollama and self.connected:
             self._add_message("⟳ Aggiornamento modelli...", "info")
             all_models = self.ollama.list_models()
+            # Mostra TUTTI i modelli, non solo shellbot
+            self.models = all_models
             shell_models = [m for m in all_models if "shellbot" in m.lower()]
-            self.models = shell_models
-            if shell_models and self.ollama.model not in shell_models:
-                self.ollama.model = shell_models[0]
+            
+            if not shell_models and all_models:
+                self._add_message(f"⚠️ Nessun modello shellBot trovato. {len(all_models)} modelli disponibili:", "warning")
+            elif shell_models:
+                self._add_message(f"✓ {len(shell_models)} modelli shellBot su {len(all_models)} totali:", "success")
+            
             self.models_listbox.delete(0, tk.END)
-
-            if self.models:
-                self._add_message(f"✓ {len(self.models)} modelli shellBot:", "success")
-                for i, m in enumerate(self.models, 1):
-                    prefix = "► " if m == self.ollama.model else f"{i}. "
-                    self.models_listbox.insert(tk.END, f"{prefix}{m}")
-                    self._add_message(f"  {prefix}{m}", "model_list")
-            else:
-                self._add_message("⚠️ Nessun modello shellBot trovato", "warning")
+            for i, m in enumerate(all_models, 1):
+                is_shell = "shellbot" in m.lower()
+                is_active = m == self.ollama.model
+                if is_active:
+                    prefix = "► "
+                elif is_shell:
+                    prefix = f"🤖 {i}. "
+                else:
+                    prefix = f"   {i}. "
+                self.models_listbox.insert(tk.END, f"{prefix}{m}")
+                self._add_message(f"  {prefix}{m}", "model_list")
+            
+            if not all_models:
+                self._add_message("⚠️ Nessun modello disponibile", "warning")
 
     # Comandi rapidi
     def _cmd_fix(self):
@@ -1929,7 +2538,9 @@ Devi produrre ESATTAMENTE un file JSON valido con comandi "Set-Content", contene
 
 def main():
     """Avvia l'applicazione GUI."""
+    logger.info("=== FUNZIONE MAIN CHIAMATA ===")
     root = tk.Tk()
+    logger.info("Tk root creato")
 
     # Icona (se disponibile)
     try:
@@ -1937,7 +2548,9 @@ def main():
     except:
         pass
 
+    logger.info("Avvio OllamaBridgeGUI...")
     app = OllamaBridgeGUI(root)
+    logger.info("GUI inizializzata, avvio mainloop...")
     root.mainloop()
 
 

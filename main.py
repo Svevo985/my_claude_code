@@ -58,6 +58,33 @@ def save_history():
 REQUEST_LOG_DIR = LOG_DIR / "requests"
 REQUEST_LOG_DIR.mkdir(exist_ok=True)
 
+def clear_logs():
+    """Cancella tutti i file di log dalle sessioni precedenti."""
+    try:
+        # Cancella i file .log nella directory principale dei log
+        for log_file in LOG_DIR.glob("*.log"):
+            try:
+                log_file.unlink()
+            except Exception:
+                pass
+        
+        # Cancella i file JSON nelle richieste
+        if REQUEST_LOG_DIR.exists():
+            for req_file in REQUEST_LOG_DIR.glob("*.json"):
+                try:
+                    req_file.unlink()
+                except Exception:
+                    pass
+                    
+        # Cancella altri eventuali file JSON di sessione vecchi nella root log
+        for session_file in LOG_DIR.glob("session_*.json"):
+            try:
+                session_file.unlink()
+            except Exception:
+                pass
+    except Exception as exc:
+        print(f"Errore durante la pulizia dei log: {exc}")
+
 def log_request_response(session_id: str, request: dict, response: dict = None, error: str = None):
     """Logga request/response con timestamp."""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -81,9 +108,19 @@ def log_request_response(session_id: str, request: dict, response: dict = None, 
         logger.error(f"[{ts}] ERROR: {error}")
 
 _ensure_utf8_stdio()
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler(LOG_DIR / f"ollama_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log", encoding='utf-8'), logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
+
+def setup_logging():
+    """Configura il logging su file e console."""
+    log_file = LOG_DIR / f"ollama_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
 
 class Colors:
     RESET, BOLD, DIM, RED, GREEN, YELLOW, BLUE, CYAN, WHITE, ORANGE, GRAY, MAGENTA = "\033[0m", "\033[1m", "\033[2m", "\033[31m", "\033[32m", "\033[33m", "\033[34m", "\033[36m", "\033[37m", "\033[38;5;208m", "\033[38;5;245m", "\033[35m"
@@ -145,7 +182,7 @@ class ClaudeContext:
         try:
             self._c = self.f.read_text(encoding='utf-8', errors='replace')
             return True
-        except Exception as exc: logger.error(f"Errore load CLAUDE.md: {e}"); return False
+        except Exception as exc: logger.error(f"Errore load CLAUDE.md: {exc}"); return False
     def get(self) -> str: return self._c
     def exists(self) -> bool: return self.f.exists()
     def ctx(self) -> str:
@@ -186,7 +223,7 @@ class Tester:
             r = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=str(self.d), timeout=timeout)
             return (r.returncode==0, r.stdout, r.stderr)
         except subprocess.TimeoutExpired: return False, "", f"Timeout {timeout}s"
-        except Exception as exc: return False, "", str(e)
+        except Exception as exc: return False, "", str(exc)
 
 class State:
     def __init__(self, f: Path):
@@ -247,7 +284,7 @@ def _fix_file_content(filepath: Path, fix_func) -> bool:
             return True
         return False
     except Exception as exc:
-        logger.error(f"Errore fix {filepath}: {e}")
+        logger.error(f"Errore fix {filepath}: {exc}")
         return False
 
 def _fix_python_content(content: str) -> str:
@@ -304,7 +341,7 @@ class Bridge:
             "num_ctx": 8192,
             "num_batch": 512,
             "num_predict": 2048,  # LIMITE per evitare generazioni infinite
-            "num_thread": 8,
+            "num_thread": 6,
         }
 
         self.ollama = OllamaClient(
@@ -472,7 +509,7 @@ class Bridge:
             output = (result.stdout or "") + (result.stderr or "")
             return (result.returncode == 0, output.strip())
         except Exception as exc:
-            return (False, f"Errore: {e}")
+            return (False, f"Errore: {exc}")
 
     def _load_template_modelfile(self) -> Optional[str]:
         candidates: List[Path] = []
@@ -489,7 +526,7 @@ class Bridge:
                 try:
                     return path.read_text(encoding='utf-8', errors='replace')
                 except Exception as exc:
-                    logger.error(f"Errore lettura {path}: {e}")
+                    logger.error(f"Errore lettura {path}: {exc}")
         return None
 
     def _write_temp_modelfile(self, template: str, base_model: str, slug: str) -> Path:
@@ -506,7 +543,7 @@ class Bridge:
         try:
             models.update(self.ollama.list_models())
         except Exception as exc:
-            logger.error(f"list_models API error: {e}")
+            logger.error(f"list_models API error: {exc}")
         ok, out = self.ops.execute_command("ollama list", timeout=60)
         if ok and out:
             status("📄 ollama list", "info")
@@ -632,39 +669,10 @@ class Bridge:
             return (False, "Here-string terminator ('@) mancante o non su riga singola")
         return (True, "OK")
 
-    def _try_python_write(self, cmd: str) -> tuple[bool, bool, str]:
-        """
-        Intercetta Set-Content/Add-Content verso file .md e scrive con Python.
-        Bypassa PowerShell evitando problemi di escaping su contenuto testuale.
-        Returns: (intercepted, success, output_message)
-        """
-        pattern = re.match(
-            r"(Set-Content|Add-Content)\s+-Path\s+'([^']+\.md)'\s+-Value\s+'(.*)'$",
-            cmd.strip(), re.DOTALL | re.IGNORECASE
-        )
-        if not pattern:
-            return False, False, ""
-
-        verb    = pattern.group(1).lower()
-        fpath   = pattern.group(2)
-        content = pattern.group(3)
-
-        # Ripristina escape sequence -> caratteri reali
-        content = content.replace('\\n', '\n')
-        content = content.replace('\\t', '\t')
-        content = content.replace("''", "'")   # PowerShell escape apici singoli
-
-        try:
-            mode = 'a' if 'add-content' in verb else 'w'
-            with open(fpath, mode, encoding='utf-8') as f:
-                f.write(content)
-            return True, True, f"Scritto via Python: {fpath}"
-        except Exception as exc:
-            return True, False, str(e)
 
     def _try_python_write(self, cmd: str) -> tuple[bool, bool, str]:
         """
-        Intercetta Set-Content/Add-Content verso file .md e scrive con Python.
+        Intercetta Set-Content/Add-Content verso file e scrive con Python.
         Bypassa PowerShell evitando problemi con apici, liste numerate, trattini ecc.
         Returns: (intercepted, success, output_message)
         """
@@ -676,27 +684,38 @@ class Bridge:
             return False, False, ""
         verb = verb_match.group(1).lower()
 
-        # Estrai il path — deve essere un .md
-        path_match = re.search(r"-Path\s+'([^']+\.md)'", cmd_stripped, re.IGNORECASE)        
+        # Estrai il path — INTERCETTA TUTTI I FILE, non solo .md
+        path_match = re.search(r"-Path\s+'([^']+)'", cmd_stripped, re.IGNORECASE)
+        if not path_match:
+            # Prova con doppio quotes
+            path_match = re.search(r'-Path\s+"([^"]+)"', cmd_stripped, re.IGNORECASE)
+        if not path_match:
+            # Prova senza quotes (path semplice)
+            path_match = re.search(r"-Path\s+(\S+)", cmd_stripped, re.IGNORECASE)
         if not path_match:
             return False, False, ""
+        
         fpath = path_match.group(1)
 
-        # Estrai il valore — tutto dopo -Value ' fino alla fine
+        # Estrai il valore — tutto dopo -Value ' o -Value " fino alla fine
         value_match = re.search(r"-Value\s+'(.*)", cmd_stripped, re.DOTALL | re.IGNORECASE)
+        if not value_match:
+            # Prova con doppio quotes
+            value_match = re.search(r'-Value\s+"(.*)', cmd_stripped, re.DOTALL | re.IGNORECASE)
         if not value_match:
             return False, False, ""
 
         content = value_match.group(1)
 
         # Rimuovi la virgoletta finale se presente
-        if content.endswith("'"):
+        if content.endswith("'") or content.endswith('"'):
             content = content[:-1]
 
         # Ripristina escape sequence
         content = content.replace('\\n', '\n')
         content = content.replace('\\t', '\t')
         content = content.replace("''", "'")   # PowerShell escape apici singoli
+        content = content.replace('""', '"')   # PowerShell escape doppi apici
 
         try:
             mode = 'a' if 'add-content' in verb else 'w'
@@ -758,9 +777,24 @@ class Bridge:
                 if out: print_output(out)
                 status(f"✓ Comando {i} eseguito", "success")
                 success_count += 1
+                # Log successful command
+                if self.sess:
+                    log_request_response(
+                        self.sess.id,
+                        {"command": cmd, "action": "execute"},
+                        {"success": True, "output_length": len(out) if out else 0}
+                    )
             else:
                 status(f"✗ Comando {i} fallito: {out}", "error")
                 failures.append((i, cmd, out))
+                # Log failed command with full error details
+                logger.error(f"Command {i} failed: {cmd[:200]}... Error: {out}")
+                if self.sess:
+                    log_request_response(
+                        self.sess.id,
+                        {"command": cmd, "action": "execute", "command_index": i},
+                        {"success": False, "error": out, "error_length": len(out) if out else 0}
+                    )
 
         self._commands_executed = success_count > 0
 
@@ -850,7 +884,7 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                     content = content[:800] + "\n... (troncato - file lungo)"
                 context += f"### {f.name}:\n```\n{content}\n```\n\n"
             except Exception as exc:
-                logger.error(f"Errore lettura {f}: {e}")
+                logger.error(f"Errore lettura {f}: {exc}")
         return context
 
     def _update_claude_md_fix(self, user_request: str):
@@ -867,7 +901,7 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                     f.write(f"# Fix History\n\n{fix_entry}")
             status("📝 claude.md aggiornato", "success")
         except Exception as exc:
-            logger.error(f"Errore update claude.md: {e}")
+            logger.error(f"Errore update claude.md: {exc}")
 
     def _done(self, t) -> bool:
         if not t:
@@ -904,8 +938,11 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                     file_ctx = self._read_file_context()
                     if file_ctx:
                         self.sess.add_message("user", f"## Contesto: devo fixare un progetto esistente.\n\n{file_ctx}")
-                        self.sess.add_message("user", f"## Task: {u}\n\nISTRUZIONI:\n1. Analizza i file sopra\n2. Identifica il problema\n3. Rispondi SOLO con comandi JSON per fixare\n4. NON creare README.md (usa solo claude.md)")
+                        self.sess.add_message("user", f"## Task: {u}\n\nISTRUZIONI DI PIANIFICAZIONE:\n1. Analizza i file sopra.\n2. Prima di scrivere codice, crea/aggiorna `claude_plan.md` con una DESCRIZIONE SINTETICA e i PASSI LOGICI dell'intervento.\n3. NON scrivere classi intere o codice completo in `claude_plan.md` - solo logiche e intenti.\n4. Rispondi SOLO con comandi JSON.\n5. NON creare README.md (usa solo claude.md)")
                         continue
+                if self.mode == 'new':
+                    self.sess.add_message("user", f"## Task: {u}\n\nISTRUZIONI DI PIANIFICAZIONE:\n1. Inizia SEMPRE creando `claude_plan.md`.\n2. Scrivi una DESCRIZIONE SINTETICA del progetto e i PASSI LOGICI per ogni modulo/file.\n3. NON scrivere classi intere, definizioni di metodi cariche di codice o implementazioni complete nel piano - solo logiche e intenti.\n4. Dopo il piano, procedi con la creazione dei file nei turni successivi.\n5. Rispondi SOLO con comandi JSON.\n6. NON creare README.md (usa solo claude.md)")
+                    continue
                 self.sess.add_message("user", u)
             elif self._failed_commands:
                 file_ctx = self._read_file_context()
@@ -1004,8 +1041,9 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                 if not p.is_valid:
                     status(f"✗ Parsing fallito: {p.error}", "error")
                     logger.error(f"JSON parsing error: {p.error}")
-                    logger.error(f"Raw response (first 800 chars): {llm[:800]}")
-                    logger.error(f"Parser raw_response: {p.raw_response[:500] if p.raw_response else 'None'}")
+                    logger.error(f"Raw response (first 1000 chars): {llm[:1000]}")
+                    if len(llm) > 1000:
+                        logger.debug(f"Full raw response: {llm}")
                     if self.auto_c:
                         self.sess.add_message("user", f"Errore parsing JSON: {p.error}. Ripeti i comandi in formato JSON valido.")
                         continue
@@ -1085,9 +1123,20 @@ JSON:"""
                 return "Nessun comando"
             except Exception as exc:
                 self.thinking.stop()
-                status(f"❌ Errore: {e}", "error")
-                logger.exception(f"Chat error: {e}")
-                return f"Errore: {e}"
+                status(f"❌ Errore: {exc}", "error")
+                logger.exception(f"Chat error: {exc}")
+                # Log the exception to file for debugging
+                error_msg = f"Exception in chat loop: {exc}\n"
+                error_msg += f"Session ID: {self.sess.id if self.sess else 'None'}\n"
+                error_msg += f"Iteration: {iteration}/{max_iterations}\n"
+                error_msg += f"Mode: {self.mode}\n"
+                error_msg += f"Model: {self.ollama.model}\n"
+                log_request_response(
+                    self.sess.id if self.sess else 'no_session',
+                    {"error": "exception", "iteration": iteration},
+                    error=str(exc)
+                )
+                return f"Errore: {exc}"
         return "Max iterazioni raggiunte"
 
     def show_ctx(self):
@@ -1208,9 +1257,9 @@ Non usare comandi shell, solo READ + path relativo."""
             self._reverse_log(f"select_resp_raw={select_resp.strip()[:2000]}")
         except Exception as exc:
             self.thinking.stop()
-            logger.exception(f"Reverse select error: {e}")
-            self._reverse_log(f"select_error={e}")
-            return f"❌ Errore selezione file: {e}"
+            logger.exception(f"Reverse select error: {exc}")
+            self._reverse_log(f"select_error={exc}")
+            return f"❌ Errore selezione file: {exc}"
 
         selected_by_llm = []
         selection_source = "llm"
@@ -1357,9 +1406,9 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                     return doc_file.read_text(encoding='utf-8', errors='replace')[:3000]
             return llm
         except Exception as exc:
-            logger.exception(f"Reverse error: {e}")
-            self._reverse_log(f"reverse_error={e}")
-            return f"❌ Errore: {e}"
+            logger.exception(f"Reverse error: {exc}")
+            self._reverse_log(f"reverse_error={exc}")
+            return f"❌ Errore: {exc}"
         finally:
             # Ripristina sempre le opzioni originali
             self.ollama.options["num_ctx"] = original_ctx
@@ -1397,7 +1446,7 @@ Importante: chiudi il JSON con }} alla fine."""
             # Combina originale + continuazione
             return truncated_llm + "\n" + continuation
         except Exception as exc:
-            logger.error(f"Continue error: {e}")
+            logger.error(f"Continue error: {exc}")
             return truncated_llm
 
     def _cmd_ui(self, c) -> bool:
@@ -1447,7 +1496,7 @@ Importante: chiudi il JSON con }} alla fine."""
                     status(f"📝 Documentazione salvata: {doc_file}", "success")
                     print(f"\n  {Colors.CYAN}{doc[:1000]}{'...' if len(doc) > 1000 else ''}{Colors.RESET}\n")
                 except Exception as exc:
-                    status(f"Errore salvataggio: {e}", "error")
+                    status(f"Errore salvataggio: {exc}", "error")
                     print(f"\n  {Colors.CYAN}{doc}{Colors.RESET}\n")
             else:
                 status(doc, "error")
@@ -1512,6 +1561,8 @@ def _strip_surrounding_quotes(text: str) -> str:
             except EOFError: break
 
 def main():
+    clear_logs()
+    setup_logging()
     ap = argparse.ArgumentParser(
         description="Ollama File System Bridge - CLI e GUI per interagire con Ollama LLM",
         formatter_class=argparse.RawDescriptionHelpFormatter,

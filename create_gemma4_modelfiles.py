@@ -11,7 +11,7 @@ GEMMA4_BASE = r'''FROM gemma:latest
 
 # ── Gemma 4 Optimized Parameters ─────────────────────────────────────────
 PARAMETER num_batch 1024
-PARAMETER num_thread 8
+PARAMETER num_thread 6
 PARAMETER num_ctx 16384
 PARAMETER num_predict 4096
 PARAMETER temperature 0.1
@@ -77,7 +77,7 @@ GEMMA4_CREATE = r'''FROM gemma:latest
 
 # ── Gemma 4 Optimized Parameters for CREATE/FIX ────────────────────────────
 PARAMETER num_batch 1024
-PARAMETER num_thread 8
+PARAMETER num_thread 6
 PARAMETER num_ctx 16384
 PARAMETER num_predict 4096
 PARAMETER temperature 0.1
@@ -133,7 +133,7 @@ GEMMA4_DOCS = r'''FROM gemma:latest
 
 # ── Gemma 4 Optimized Parameters for DOCUMENTATION ─────────────────────────
 PARAMETER num_batch 1024
-PARAMETER num_thread 8
+PARAMETER num_thread 6
 PARAMETER num_ctx 16384
 PARAMETER num_predict 4096
 PARAMETER temperature 0.1

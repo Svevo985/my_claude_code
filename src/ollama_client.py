@@ -174,8 +174,8 @@ class OllamaClient:
             logger.warning("Timeout nel kill di Ollama")
         except FileNotFoundError:
             logger.debug("Nessun processo Ollama da terminare")
-        except Exception as e:
-            logger.debug(f"Errore nel kill di Ollama: {e}")
+        except Exception as exc:
+            logger.debug(f"Errore nel kill di Ollama: {exc}")
 
     def _start_ollama(self) -> tuple[bool, str]:
         """Avvia Ollama in background."""
@@ -200,8 +200,8 @@ class OllamaClient:
             return True, "Ollama avviato"
         except FileNotFoundError:
             return False, "Ollama non trovato. Installa Ollama prima."
-        except Exception as e:
-            return False, f"Errore nell'avvio di Ollama: {e}"
+        except Exception as exc:
+            return False, f"Errore nell'avvio di Ollama: {exc}"
 
     def check_model_exists(self, model_name: str) -> bool:
         """Controlla se un modello esiste in Ollama."""

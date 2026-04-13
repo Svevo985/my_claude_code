@@ -1,8 +1,8 @@
-FROM gemma:latest
+FROM hf.co/TrevorJS/gemma-4-E4B-it-uncensored-GGUF:Q4_K_M
 
-# ── Gemma 4 Optimized Parameters ─────────────────────────────────────────
+# ── Gemma 4 Optimized Parameters for CREATE/FIX ────────────────────────────
 PARAMETER num_batch 1024
-PARAMETER num_thread 6
+PARAMETER num_thread 8
 PARAMETER num_ctx 16384
 PARAMETER num_predict 4096
 PARAMETER temperature 0.1
@@ -30,16 +30,6 @@ SYNTAX RULES:
 - Use ONLY ASCII characters for JSON syntax
 - NO markdown code blocks, NO backticks, NO triple backticks
 - NO text before the opening { or after the closing }
-- NO comments (// or /* */) inside JSON
-
-MODE /new - CREATE PROJECT:
-{"cmd1": "New-Item -ItemType Directory -Force -Path 'C:\\proj'", "cmd2": "Set-Content -Path 'C:\\proj\\main.py' -Value 'print(\"hello\")'"}
-
-MODE /fix - FIX BUGS:
-{"cmd1": "Get-Content -Path 'file.py'", "cmd2": "Set-Content -Path 'file.py' -Value 'fixed code'"}
-
-MODE /reverse - GENERATE DOCUMENTATION:
-Read all files and create DOCUMENTAZIONE.md with project overview, file structure, technologies, and main functions.
 
 POWERSHELL RULES (WINDOWS):
 - Use Set-Content for writing files: Set-Content -Path 'file' -Value 'content'
@@ -48,16 +38,16 @@ POWERSHELL RULES (WINDOWS):
 - NEVER use bash heredoc (cat << EOF)
 - NEVER use bash echo > for file creation
 - NEVER use mkdir -p (use New-Item instead)
-- ONE command per file
 
 EXAMPLE CORRECT OUTPUT:
-{"cmd1": "New-Item -ItemType Directory -Force -Path 'C:\\proj'", "cmd2": "Set-Content -Path 'C:\\proj\\index.html' -Value '<html><body>Hello</body></html>'"}
+{"cmd1": "New-Item -ItemType Directory -Force -Path 'C:\\proj'", "cmd2": "Set-Content -Path 'C:\\proj\\index.html' -Value '<html><body>Tris Game</body></html>'", "cmd3": "Set-Content -Path 'C:\\proj\\style.css' -Value 'body { margin: 0; }'"}
 
 EXAMPLE WRONG OUTPUT (NEVER DO THIS):
-- {"cmdhtml": "mkdir -p ..."} <- WRONG key name
+- {"cmdhtml": "mkdir -p ..."} <- WRONG key name, WRONG syntax
 - {"cmd1":  : "value"} <- DOUBLE colon
+- {"cmd1": "value with curly quotes"} <- SMART QUOTES
+- ```json {"cmd1": "..."} ``` <- MARKDOWN BLOCKS
 - {"cmd1": "cat << 'EOF' > file"} <- BASH HEREDOC
 
 ONLY use cmd1, cmd2, cmd3... as keys. Start from 1. No gaps.
-Stop immediately after the closing }.
 """

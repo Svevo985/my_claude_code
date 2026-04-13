@@ -33,3 +33,6 @@ Thumbs.db
 
 # History
 .ollama_bridge_history
+
+# Models
+*.gguf
