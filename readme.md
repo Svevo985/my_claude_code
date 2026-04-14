@@ -254,12 +254,22 @@ fixa il gioco del tris che non parte quando clicco su "New Game"
 Il bridge **cambia automaticamente modello** in base alla modalità attiva:
 
 ```
+Modelli "coder" (qwen3.5, ecc.)  →  Workflow diretto (pianifica + esegue)
+Altri modelli                    →  Workflow agentic (pianificatore + esecutore separati)
 Modalità /new o /fix  →  shellbot-create:latest
 Modalità /reverse     →  shellbot-docs:latest
 Modalità /resume      →  shellbot-create:latest
 ```
 
-Questo perché i modelli specializzati hanno **system prompt ottimizzati** per il compito specifico:
+### Rilevamento Modelli "Full Coder"
+
+I modelli come **qwen3.5-9b-sushi-coder** vengono rilevati automaticamente e usati sia per pianificazione che per esecuzione:
+- **Contenuto "qwen", "coder" o "sushi"** → workflow diretto (più efficiente)
+- **Altri modelli** → workflow agentic con cambio modello tra pianificazione ed esecuzione
+
+### Modelli Specializzati
+
+I modelli specializzati hanno **system prompt ottimizzati** per il compito specifico:
 - **Create/Fix**: comandi brevi e precisi, focus su creazione file
 - **Docs/Reverse**: context window più ampia, focus su analisi e documentazione
 

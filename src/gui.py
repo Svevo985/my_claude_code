@@ -1802,20 +1802,27 @@ NON scrivere: implementazione funzioni, codice JS
 Genera ORA il piano per: {user_message}"""
 
             self.root.after(0, lambda: self._add_message("\n📝 Generazione piano...", "info"))
-            
+
+            logger.info(f"=== PIANO PROMPT ===\n{plan_prompt[:2000]}")
             plan_resp = ""
             for chunk in self.ollama.chat([{"role": "user", "content": plan_prompt}], stream=True):
                 if self.stop_flag:
                     break
                 plan_resp += chunk
-            
+
+            logger.info(f"=== PIANO RISPOSTA ({len(plan_resp)} chars) ===\n{plan_resp[:3000]}")
+
             if self.stop_flag:
                 return
-            
+
+            if not plan_resp.strip():
+                logger.error("ERRORE: risposta del piano è VUOTA. Il modello non ha risposto nulla.")
+                self.root.after(0, lambda: self._add_message("❌ Risposta piano vuota - controlla i log", "error"))
+
             # Salva il piano
             plan_file = p_path / "claude_plan.md"
             plan_file.write_text(plan_resp, encoding="utf-8", errors="replace")
-            logger.info(f"Piano salvato")
+            logger.info(f"Piano salvato ({len(plan_resp)} chars)")
             self.root.after(0, lambda: self._add_message(f"📝 Piano salvato", "success"))
             
             # Estrai nomi file dal piano
@@ -1849,43 +1856,44 @@ Genera ORA il piano per: {user_message}"""
                 # Ottieni memoria attuale da iniettare
                 memory_context = memory.get_memory_summary()
                 
-                # Prompt per esecutore CON memoria - PIÙ STRINGENTE
-                step_msg = f"""## PROGETTO: {project_name}
+                # Costruisci regole specifiche per tipo file
+                ext = filename.lower().split('.')[-1] if '.' in filename else ''
+                file_rules = ""
+                if ext == 'html':
+                    file_rules = """REGOLE HTML:
+- VIETATO <style>...</style> inline
+- VIETATO <script>...</script> inline
+- OBBLIGATORIO: <link rel="stylesheet" href="style.css"> nel <head>
+- OBBLIGATORIO: <script src="script.js"></script> prima di </body>
+- Scrivi HTML completo con <!DOCTYPE html>"""
+                elif ext == 'css':
+                    file_rules = """REGOLE CSS:
+- SOLO regole CSS, niente HTML o JS
+- Ogni regola su riga separata (usa \\n tra le regole)
+- Codice completo e funzionante"""
+                elif ext == 'js':
+                    file_rules = """REGOLE JS:
+- SOLO codice JavaScript, niente HTML o CSS
+- USA SOLO virgolette DOPPIE "" per le stringhe (MAI virgolette singole '')
+- getElementById("id") e querySelectorAll(".class") con virgolette doppie
+- Funzioni complete con parentesi graffe { }
+- Codice completo e funzionante"""
+
+                step_msg = f"""## STEP {i}/{len(steps)}: CREA {filename}
+
+Piano: {plan_resp[:800]}
 
 {memory_context}
 
-## STEP {i}/{len(steps)}: CREA {filename}
+{file_rules}
 
-Contesto dal piano:
-{plan_resp[:1000]}
+## FORMATO OBBLIGATORIO:
+CREA SOLO {filename}. Rispondi SOLO con JSON:
+{{"cmd1": "Set-Content -Path '{filename}' -Value 'CONTENUTO_COMPLETO_QUI'"}}
 
-## ⚠️ REGOLE CRITICHE:
-1. CREA SOLO {filename} - NON altri file
-2. {filename} DEVE essere un file SEPARATO
-3. Se {filename} == "index.html":
-   - VIETATO <style>...</style> inline
-   - VIETATO <script>...</script> inline
-   - OBBLIGATORIO <link rel="stylesheet" href="style.css">
-   - OBBLIGATORIO <script src="script.js"></script>
-4. Se {filename} == "style.css":
-   - SOLO regole CSS, NIENTE HTML o JS
-   - Usa selettori: .cell, #status, #reset-btn
-5. Se {filename} == "script.js":
-   - SOLO codice JavaScript, NIENTE HTML o CSS
-   - Usa getElementById("status"), getElementById("reset-btn")
-   - Usa querySelectorAll(".cell")
-6. Codice COMPLETO e FUNZIONANTE
-7. NO placeholder, NO "// ..."
-
-## FORMATO OUTPUT - SOLO JSON:
-{{"cmd1": "Set-Content -Path '{filename}' -Value 'contenuto'"}}
-
-⚠️ IMPORTANTE:
-- Le virgolette singole ' nel contenuto vanno escapate come ''
-- Le newline vanno come \\n
-- NON includere altri file nel JSON
-
-Genera ORA il JSON per {filename}:"""
+Escaping: ' nel contenuto = '' | newline = \\\\n | tab = \\\\t | " nel contenuto = \\\\"
+Il codice deve essere COMPLETO e FUNZIONANTE.
+"""
                 
                 self.root.after(0, lambda fn=filename, idx=i: self._add_message(f"\n▶ STEP {idx}: {fn}", "warning"))
                 
@@ -1896,20 +1904,42 @@ Genera ORA il JSON per {filename}:"""
                 for attempt in range(max_retries + 1):
                     if self.stop_flag:
                         break
-                    
+
+                    # System prompt JSON iniettato via API (non nel modelfile)
+                    exec_system = (
+                        "You are a senior software engineer. "
+                        "Reply ONLY with a valid JSON object like: "
+                        "{\"cmd1\": \"Set-Content -Path 'filename' -Value 'content'\"}. "
+                        "Escape single quotes inside content as ''. "
+                        "Use \\n for newlines. No explanations, no markdown, no text outside JSON."
+                    )
+                    exec_messages = [
+                        {"role": "system", "content": exec_system},
+                        {"role": "user", "content": step_msg}
+                    ]
+
+                    logger.info(f"=== STEP {i} attempt {attempt+1}: invio prompt ({len(step_msg)} chars) ===\n{step_msg[:1500]}")
+
                     response = ""
-                    for chunk in self.ollama.chat([{"role": "user", "content": step_msg}], stream=True):
+                    for chunk in self.ollama.chat(exec_messages, stream=True):
                         if self.stop_flag:
                             break
                         response += chunk
-                    
+
+                    logger.info(f"=== STEP {i} RISPOSTA ({len(response)} chars) ===\n{response[:2000]}")
+
                     if self.stop_flag:
                         break
-                    
+
+                    # Rimuovi eventuali thinking tags prima del parsing
+                    clean_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL | re.IGNORECASE).strip()
+
                     # Estrai JSON
-                    json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                    json_match = re.search(r'\{.*\}', clean_response, re.DOTALL)
                     if json_match:
                         parsed = self.parser.parse(json_match.group(0))
+                        if not parsed.is_valid:
+                            logger.warning(f"JSON trovato ma non valido: {parsed.error}. JSON estratto: [{json_match.group(0)[:300]}]")
                         if parsed.is_valid and parsed.commands:
                             # Esegui comandi
                             for cmd in parsed.commands:
@@ -1933,9 +1963,11 @@ Genera ORA il JSON per {filename}:"""
                                 step_msg += "\n\n⚠️ RISPOSTA PRECEDENTE NON VALIDA! Riprova con JSON corretto."
                     else:
                         if attempt < max_retries:
-                            logger.warning(f"Nessun JSON trovato, retry {attempt+1}")
+                            logger.warning(f"Nessun JSON trovato nella risposta (attempt {attempt+1}). Risposta ricevuta: [{response[:500]}]")
                             self.root.after(0, lambda a=attempt+1: self._add_message(f"🔄 Retry {a}...", "warning"))
-                            step_msg += "\n\n⚠️ NON hai generato JSON! Rispondi SOLO con JSON."
+                            step_msg += "\n\n⚠️ NON hai generato JSON! Rispondi SOLO con JSON valido."
+                        else:
+                            logger.error(f"Nessun JSON trovato dopo tutti i tentativi. Ultima risposta: [{response[:1000]}]")
                 
                 if not success:
                     logger.error(f"Fallito creazione {filename} dopo {max_retries+1} tentativi")
@@ -2000,61 +2032,156 @@ Genera SOLO JSON: {{"cmd1": "Set-Content -Path '{missing_file}' -Value '...'"}}"
             self.root.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
 
     def _execute_command_with_fallback(self, cmd: str, p_path: Path, filename: str) -> bool:
-        """Esegue comando con fallback Python nativo e VALIDAZIONE contenuto."""
+        """Esegue comando con fallback Python nativo, parsing robusto e VALIDAZIONE."""
         try:
             import re
             cmd_str = cmd.strip()
             
             if cmd_str.startswith("Set-Content") or cmd_str.startswith("Add-Content"):
+                # Estrai Path
                 p_match = re.search(r"-Path\s+'([^']*)'", cmd_str)
                 if not p_match:
                     p_match = re.search(r"-Path\s+\"([^\"]*)\"", cmd_str)
+                if not p_match:
+                    logger.error(f"❌ Nessun -Path trovato nel comando")
+                    return False
                 
-                v_start = cmd_str.find("-Value ")
-                if v_start == -1:
-                    v_start = cmd_str.find("-Value\t")
+                # Estrai Value con parsing ROBUSTO
+                content = self._extract_value_from_command(cmd_str)
+                if content is None:
+                    logger.error(f"❌ Impossibile estrarre -Value dal comando")
+                    return False
                 
-                if p_match and v_start != -1:
-                    value_start_pos = v_start + 7
-                    while value_start_pos < len(cmd_str) and cmd_str[value_start_pos] in ' \t':
-                        value_start_pos += 1
-                    
-                    if value_start_pos < len(cmd_str):
-                        quote_char = cmd_str[value_start_pos]
-                        if quote_char in ("'", '"'):
-                            content_start = value_start_pos + 1
-                            content_end = cmd_str.rfind(quote_char)
-                            if content_end > content_start:
-                                content = cmd_str[content_start:content_end]
-                                
-                                if quote_char == "'":
-                                    content = content.replace("''", "'")
-                                elif quote_char == '"':
-                                    content = content.replace('\\"', '"')
-                                
-                                content = content.replace('\\n', '\n').replace('\\t', '\t')
-                                
-                                # === VALIDAZIONE CRITICA ===
-                                validation = self._validate_file_content(filename, content)
-                                if not validation['valid']:
-                                    logger.error(f"❌ VALIDAZIONE FALLITA per {filename}: {validation['reason']}")
-                                    return False
-                                # =========================
-                                
-                                t_file = p_path / Path(p_match.group(1)).name
-                                t_file.parent.mkdir(parents=True, exist_ok=True)
-                                mode = 'a' if cmd_str.startswith("Add-Content") else 'w'
-                                with open(t_file, mode, encoding='utf-8') as f:
-                                    f.write(content)
-                                logger.info(f"✅ File creato: {t_file.name} ({len(content)} bytes)")
-                                return True
+                # === VALIDAZIONE CRITICA ===
+                validation = self._validate_file_content(filename, content)
+                if not validation['valid']:
+                    logger.error(f"❌ VALIDAZIONE FALLITA per {filename}: {validation['reason']}")
+                    return False
+                # =========================
+                
+                t_file = p_path / Path(p_match.group(1)).name
+                t_file.parent.mkdir(parents=True, exist_ok=True)
+                mode = 'a' if cmd_str.startswith("Add-Content") else 'w'
+                with open(t_file, mode, encoding='utf-8') as f:
+                    f.write(content)
+                logger.info(f"✅ File creato: {t_file.name} ({len(content)} bytes)")
+                return True
             
+            # Supporto heredoc: cat << 'EOF' > file o cat << 'EOF' > file
+            heredoc_match = re.search(
+                r"cat\s+<<\s*'?EOF'?\s*>\s*(.+?)(?:\s*\n|\s*\\n)",
+                cmd_str
+            )
+            if heredoc_match:
+                heredoc_path = heredoc_match.group(1).strip().strip("'\"")
+                # Estrai contenuto tra la prima riga e EOF finale
+                # Il contenuto è tutto dopo il primo newline fino a EOF
+                first_nl = cmd_str.find('\n', heredoc_match.end())
+                if first_nl == -1:
+                    # Prova con \\n letterale
+                    parts = cmd_str.split('\\n', 1)
+                    if len(parts) > 1:
+                        content = parts[1]
+                    else:
+                        content = cmd_str[heredoc_match.end():]
+                else:
+                    content = cmd_str[first_nl + 1:]
+
+                # Rimuovi EOF finale
+                content = re.sub(r'\n\s*EOF\s*$', '', content)
+                content = re.sub(r'\\n\s*EOF\s*$', '', content)
+                # Converti \\n letterali in newline reali
+                content = content.replace('\\n', '\n')
+                content = content.replace('\\t', '\t')
+
+                if content.strip():
+                    validation = self._validate_file_content(filename, content)
+                    if not validation['valid']:
+                        logger.error(f"❌ VALIDAZIONE FALLITA per {filename}: {validation['reason']}")
+                        return False
+
+                    t_file = p_path / Path(heredoc_path).name
+                    t_file.parent.mkdir(parents=True, exist_ok=True)
+                    with open(t_file, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    logger.info(f"✅ File creato (heredoc): {t_file.name} ({len(content)} bytes)")
+                    return True
+
             # Fallback a shell
             ok, out = self.file_ops.execute_command(cmd)
             return ok
         except Exception as e:
             logger.error(f"Errore esecuzione: {e}")
             return False
+    
+    def _extract_value_from_command(self, cmd_str: str) -> str:
+        """
+        Estrae il contenuto da -Value con parsing robusto.
+        Gestisce virgolette escapate '' e \n.
+        """
+        v_start = cmd_str.find("-Value ")
+        if v_start == -1:
+            v_start = cmd_str.find("-Value\t")
+        
+        if v_start == -1:
+            return None
+        
+        # Trova l'inizio del valore
+        value_start_pos = v_start + 7
+        while value_start_pos < len(cmd_str) and cmd_str[value_start_pos] in ' \t':
+            value_start_pos += 1
+        
+        if value_start_pos >= len(cmd_str):
+            return None
+        
+        quote_char = cmd_str[value_start_pos]
+        if quote_char not in ("'", '"'):
+            return None
+        
+        # Parsing carattere per carattere per gestire escaping
+        content_chars = []
+        pos = value_start_pos + 1  # salta virgoletta iniziale
+        
+        while pos < len(cmd_str):
+            char = cmd_str[pos]
+            
+            # Fine stringa: virgoletta non escapata
+            if char == quote_char:
+                # Controlla se è escapata (SEGUITA da altra virgoletta uguale → '')
+                if quote_char == "'" and pos + 1 < len(cmd_str) and cmd_str[pos + 1] == "'":
+                    # '' → aggiungi una singola ' e salta entrambe
+                    content_chars.append("'")
+                    pos += 2
+                    continue
+                else:
+                    # Virgoletta di chiusura trovata
+                    break
+            
+            # Gestione backslash escapes
+            if char == '\\' and pos + 1 < len(cmd_str):
+                next_char = cmd_str[pos + 1]
+                if next_char == 'n':
+                    content_chars.append('\n')
+                    pos += 2
+                    continue
+                elif next_char == 't':
+                    content_chars.append('\t')
+                    pos += 2
+                    continue
+                elif next_char == '\\':
+                    content_chars.append('\\')
+                    pos += 2
+                    continue
+                elif next_char == quote_char:
+                    content_chars.append(quote_char)
+                    pos += 2
+                    continue
+            
+            content_chars.append(char)
+            pos += 1
+        
+        content = ''.join(content_chars)
+        return content
     
     def _validate_file_content(self, filename: str, content: str) -> dict:
         """Valida che il contenuto del file sia valido e NON un placeholder."""
@@ -2089,14 +2216,29 @@ Genera SOLO JSON: {{"cmd1": "Set-Content -Path '{missing_file}' -Value '...'"}}"
         elif ext == 'css':
             if '{' not in content or '}' not in content:
                 return {'valid': False, 'reason': 'CSS: mancano parentesi graffe'}
+            # CSS dovrebbe avere multiple righe, non tutto su una riga
+            if '\n' not in content and len(stripped) > 200:
+                return {'valid': False, 'reason': 'CSS: tutto su una riga, serve newline'}
         
         elif ext == 'js':
+            # NO punto iniziale
+            if stripped.startswith('.'):
+                return {'valid': False, 'reason': 'JS: inizia con "." (errore parsing)'}
             if 'function' not in stripped.lower() and '=>' not in stripped:
                 return {'valid': False, 'reason': 'JS: manca almeno una funzione'}
+            # Controllo virgolette non chiuse - conta le virgolette singole
+            single_quotes = stripped.count("'")
+            # Se dispari, c'è una virgoletta non chiusa
+            if single_quotes % 2 != 0:
+                return {'valid': False, 'reason': f'JS: {single_quotes} virgolette singole (numero dispari = sintassi rotta)'}
+            # Controllo stringhe vuote malformate
+            if "!== '" in stripped or "== '" in stripped:
+                if "''" not in stripped:
+                    return {'valid': False, 'reason': 'JS: confronto con stringa vuota malformato (usa "" non \')'}
         
         return {'valid': True, 'reason': 'OK'}
 
-    def _update_memory_from_file(self, memory: ProjectMemory, filename: str, response: str):
+    def _update_memory_from_file(self, memory: ProjectMemory, filename: str, response: str) -> None:
         """Aggiorna memoria basandosi sul file creato."""
         import re
         
@@ -2117,10 +2259,10 @@ Genera SOLO JSON: {{"cmd1": "Set-Content -Path '{missing_file}' -Value '...'"}}"
         if filename == 'index.html':
             ids = re.findall(r'id=["\']([^"\']+)["\']', content)
             classes = re.findall(r'class=["\']([^"\']+)["\']', content)
-            has_css_link = bool(re.search(r'<link.*stylesheet.*href=["\']style\.css["\']', content))
-            has_js_link = bool(re.search(r'<script.*src=["\']script\.js["\']', content))
-            has_inline_style = bool(re.search(r'<style>.*</style>', content, re.DOTALL))
-            has_inline_script = bool(re.search(r'<script>(?!.*src=).*?</script>', content, re.DOTALL))
+            has_css_link = bool(re.search(r'<link[^>]*href=["\']style\.css["\']', content))
+            has_js_link = bool(re.search(r'<script[^>]*src=["\']script\.js["\']', content))
+            has_inline_style = bool(re.search(r'<style[^>]*>.*?</style>', content, re.DOTALL))
+            has_inline_script = bool(re.search(r'<script(?![^>]*src=)[^>]*>.*?</script>', content, re.DOTALL))
             
             memory.register_file(filename, "Struttura HTML", {
                 "ids": ids,

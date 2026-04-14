@@ -25,6 +25,7 @@ from src.project_scanner import (
     find_java_controller_classes,
     _is_spring_boot_project,
 )
+from src.project_memory import ProjectMemory
 
 LOG_DIR = Path("./logs")
 LOG_DIR.mkdir(exist_ok=True)
@@ -372,6 +373,8 @@ class Bridge:
         self._last_response_hash = ""
         self._commands_executed = False
         self.mode = 'default'
+        self._step_mode = False  # Abilita modalità step-by-step per /new
+        self._mem = None  # ProjectMemory per gestire PLAN.md
 
     def set_mode(self, m: str):
         self.mode = m
@@ -856,6 +859,140 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
                 return False
         return False
 
+    def _new_step_mode(self, user_input: str) -> str:
+        """
+        Modalità step-by-step per /new.
+        Phase 1: Planning — crea PLAN.md + INTERFACE_CONTRACT.md (sessione fresca, niente codice)
+        Phase 2: Esecuzione step per step — ogni step ha una sessione fresca
+        """
+        if not self.proj:
+            status("❌ Nessun path di progetto specificato", "error")
+            return "Err: nessun path"
+
+        # Inizializza ProjectMemory se non esiste
+        if self._mem is None:
+            self._mem = ProjectMemory(self.proj)
+
+        # --- PHASE 1: PLANNING ---
+        plan_file = self.proj / "PLAN.md"
+        contract_file = self.proj / "INTERFACE_CONTRACT.md"
+
+        if not plan_file.exists():
+            status("📋 PHASE 1: Creazione piano di progetto...", "running")
+            self._create_session()  # Sessione fresca per il planning
+
+            planning_prompt = f"""Path: {self.proj}
+Task: {user_input}
+
+Crea SOLO PLAN.md e INTERFACE_CONTRACT.md. NESSUN codice sorgente.
+
+PLAN.md formato obbligatorio:
+# Piano: <nome progetto>
+## Descrizione (max 2 righe)
+...
+
+## Steps
+- [ ] Step1: crea index.html — struttura HTML griglia 3x3 + btn nuova partita
+- [ ] Step2: crea style.css — stile giocoso colorato
+- [ ] Step3: crea game.js — funzioni: nuova_partita(), controlla_vittoria(), mostra_vincitore()
+
+INTERFACE_CONTRACT.md formato obbligato:
+HTML ids: board, message, new-game-btn
+CSS classi: .cell, .winner, .board
+JS funzioni: nuova_partita(), controlla_vittoria(), mostra_vincitore()
+JS include file: game.js
+
+JSON con esattamente 2 comandi (uno per file). Poi STOP."""
+
+            self.sess.add_message("user", planning_prompt)
+
+            try:
+                self.thinking.start()
+                llm = ""
+                for chunk in self.ollama.chat(self.sess.to_ollama_messages(), stream=True):
+                    llm += chunk
+                self.thinking.stop()
+
+                p = self.parser.parse(llm)
+                if p.is_valid and p.commands:
+                    self._execute_commands(p.commands)
+                    status("✓ PLAN.md e INTERFACE_CONTRACT.md creati", "success")
+                else:
+                    status(f"✗ Planning fallito: {p.error}", "error")
+                    return f"Err planning: {p.error}"
+            except Exception as exc:
+                status(f"❌ Errore planning: {exc}", "error")
+                return f"Err: {exc}"
+
+        # --- PHASE 2: ESECUZIONE STEP PER STEP ---
+        steps = self._mem.parse_plan_steps()
+        if not steps:
+            status("⚠️ Nessun step trovato in PLAN.md", "warning")
+            return "Err: nessun step in PLAN.md"
+
+        contract = self._mem.get_interface_contract()
+        file_digest = self._mem.get_file_digest()
+
+        # Trova il primo step non completato
+        pending_steps = [s for s in steps if not s["done"]]
+        if not pending_steps:
+            status("✓ Tutti gli step completati!", "success")
+            self._plan_done = True
+            self._step_mode = False
+            return "OK - tutti step completati"
+
+        step = pending_steps[0]
+        status(f"🔨 Step {step['num']}/{len(steps)}: {step['desc']}", "running")
+
+        # Sessione FRESCA per ogni step
+        self._create_session()
+
+        step_prompt = f"""Path: {self.proj}
+Implementa SOLO questo step: {step['desc']}
+
+CONTRATTO INTERFACCE:
+{contract}
+
+FILE GIÀ CREATI (NON riscrivere):
+{file_digest}
+
+Crea UN SOLO file. Max 150 righe. JSON con 1-2 comandi."""
+
+        self.sess.add_message("user", step_prompt)
+
+        try:
+            self.thinking.start()
+            llm = ""
+            for chunk in self.ollama.chat(self.sess.to_ollama_messages(), stream=True):
+                llm += chunk
+            self.thinking.stop()
+
+            p = self.parser.parse(llm)
+            if p.is_valid and p.commands:
+                self._execute_commands(p.commands)
+                self._mem.mark_step_done(step["num"])
+                status(f"✓ Step {step['num']} completato", "success")
+
+                # Aggiorna _last_response_hash per evitare loop detection
+                self._last_response_hash = hashlib.md5(llm.encode()).hexdigest()
+
+                # Se ci sono ancora step pendenti, continua automaticamente
+                remaining = [s for s in self._mem.parse_plan_steps() if not s["done"]]
+                if remaining:
+                    status(f"→ Prossimo step: {remaining[0]['desc']}", "info")
+                    return self._new_step_mode(user_input)  # Ricorsivo per prossimo step
+                else:
+                    status("✓ Tutti gli step completati!", "success")
+                    self._plan_done = True
+                    self._step_mode = False
+                    return "OK - tutti step completati"
+            else:
+                status(f"✗ Step {step['num']} fallito: {p.error}", "error")
+                return f"Err step {step['num']}: {p.error}"
+        except Exception as exc:
+            status(f"❌ Errore step {step['num']}: {exc}", "error")
+            return f"Err: {exc}"
+
     def _files(self) -> str:
         if not self.proj: return ""
         return "\n".join(str(f.relative_to(self.proj)) for f in self.proj.rglob("*") if f.is_file())[:400]
@@ -912,6 +1049,11 @@ Non usare comandi sed o patch parziali. Riscrivi TUTTO il file."""
 
     def chat(self, u) -> str:
         if not self.sess: return "Err"
+
+        # Deviazione per step mode (/new con modalità step-by-step)
+        if self.mode == 'new' and self._step_mode:
+            return self._new_step_mode(u)
+
         p = self._extract_path(u)
         if p and p != self.proj:
             self._init_ctx(p)
@@ -1475,11 +1617,44 @@ Importante: chiudi il JSON con }} alla fine."""
             print(f"  {Colors.DIM}Ora scrivi la richiesta di fix (es: 'fixa il gioco che non parte'){Colors.RESET}")
         elif cmd == '/new':
             self.set_mode('new')
+            self._step_mode = True  # Abilita modalità step-by-step
             self.auto_c = True
             self.auto_t = True
-            status("  • Può creare claude.md per tracciamento", "info")
-            status("  • Struttura completa del progetto", "info")
+            status("  • Modalità step-by-step attivata", "info")
+            status("  • Phase 1: crea PLAN.md + INTERFACE_CONTRACT.md (nessun codice)", "info")
+            status("  • Phase 2: esegue ogni step con sessione fresca", "info")
             print(f"  {Colors.DIM}Ora scrivi cosa creare (es: 'crea un gioco del tris in /path'){Colors.RESET}")
+        elif cmd == '/resume':
+            self.set_mode('new')
+            self._step_mode = True
+            self.auto_c = True
+            self.auto_t = True
+            # Estrai il path se fornito
+            parts = c.split(None, 1)
+            if len(parts) > 1:
+                target_path = Path(_strip_surrounding_quotes(parts[1].strip()))
+                if target_path != self.proj:
+                    self._init_ctx(target_path)
+            if not self.proj:
+                status("❌ Nessun progetto attivo. Specifica un path: /resume /path/proj", "error")
+            else:
+                # Inizializza ProjectMemory
+                if self._mem is None:
+                    self._mem = ProjectMemory(self.proj)
+                plan_file = self.proj / "PLAN.md"
+                if not plan_file.exists():
+                    status("⚠️ PLAN.md non trovato. Usa prima /new per creare il piano.", "warning")
+                else:
+                    steps = self._mem.parse_plan_steps()
+                    pending = [s for s in steps if not s["done"]]
+                    if not pending:
+                        status("✓ Tutti gli step sono già completati!", "success")
+                        self._plan_done = True
+                        self._step_mode = False
+                    else:
+                        status(f"🔄 Ripresa da step {pending[0]['num']}: {pending[0]['desc']}", "running")
+                        result = self._new_step_mode("")
+                        status(result, "info" if result.startswith("OK") else "error")
         elif cmd == '/reverse':
             status("📖 Reverse Engineering - Specifica il path del progetto", "running")
             parts = c.split(None, 1)
@@ -1508,7 +1683,8 @@ Importante: chiudi il JSON con }} alla fine."""
 
   {Colors.BOLD}Modalità di lavoro:{Colors.RESET}
     {Colors.GREEN}/fix{Colors.RESET}         Attiva modalità FIX (legge file esistenti, usa claude.md)
-    {Colors.GREEN}/new{Colors.RESET}         Attiva modalità NEW PROJECT (crea da zero con claude.md)
+    {Colors.GREEN}/new{Colors.RESET}         Attiva modalità NEW PROJECT (step-by-step con PLAN.md)
+    {Colors.GREEN}/resume{Colors.RESET}      Riprende progetto interrotto (legge PLAN.md)
     {Colors.GREEN}/reverse{Colors.RESET}     Reverse engineering (genera DOCUMENTAZIONE.md)
 
   {Colors.BOLD}Gestione:{Colors.RESET}
@@ -1525,7 +1701,8 @@ Importante: chiudi il JSON con }} alla fine."""
     /fix
     fixa il gioco del tris che non parte
     /new
-    crea un gestionale per biblioteca in /path/proj
+    crea un gioco del tris in /tmp/tris
+    /resume /tmp/tris
     /reverse /path/progetto
 
   {Colors.YELLOW}NOTA: claude.md è l'UNICO file di tracciamento (no README.md){Colors.RESET}

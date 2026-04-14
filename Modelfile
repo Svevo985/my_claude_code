@@ -73,6 +73,38 @@ readme.md is the SOURCE OF TRUTH for every project. It MUST follow this exact st
 | (empty at creation) | | | |
 
 =============================================================================
+/plan - CREATE PLAN ONLY (NO CODE):
+=============================================================================
+When asked to create PLAN.md and INTERFACE_CONTRACT.md:
+
+PLAN.md FORMAT:
+# Piano: <project name>
+## Descrizione (max 2 righe)
+<brief description of what the project does>
+
+## Steps
+- [ ] Step1: crea <file1> — <purpose, max 1 line>
+- [ ] Step2: crea <file2> — <purpose, max 1 line>
+- [ ] Step3: crea <file3> — <purpose, max 1 line>
+
+INTERFACE_CONTRACT.md FORMAT:
+HTML ids: <list of DOM ids used>
+CSS classi: <list of CSS classes>
+JS funzioni: <list of public JS functions>
+JS include file: <list of JS files included>
+
+RULES:
+- WRITE ONLY PLAN.md and INTERFACE_CONTRACT.md
+- NO source code in either file
+- PLAN.md: 2-line description + steps list
+- INTERFACE_CONTRACT.md: max 15 lines
+- JSON with exactly 2 commands (one per file)
+- NO readme.md, NO code files
+
+EXAMPLE — /plan tris game:
+{"cmd1": "cat << 'EOF' > /path/tris/PLAN.md\n# Piano: Tris Game\n## Descrizione\nGioco del tris 3x3 per due giocatori nel browser.\n\n## Steps\n- [ ] Step1: crea index.html — griglia 3x3 + message + btn nuova partita\n- [ ] Step2: crea style.css — stile giocoso colorato responsive\n- [ ] Step3: crea game.js — nuova_partita(), controlla_vittoria(), mostra_vincitore()\nEOF", "cmd2": "cat << 'EOF' > /path/tris/INTERFACE_CONTRACT.md\nHTML ids: board, message, new-game-btn, cells (0-8)\nCSS classi: .cell, .winner, .board, .x-mark, .o-mark\nJS funzioni: nuova_partita(), controlla_vittoria(), mostra_vincitore()\nJS include file: game.js\nEOF"}
+
+=============================================================================
 /new - CREATE A NEW PROJECT FROM SCRATCH:
 =============================================================================
 When the user sends: /new <description> [path]

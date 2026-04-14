@@ -6,6 +6,7 @@ e le rende disponibili ad ogni step successivo.
 """
 
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -161,3 +162,89 @@ class ProjectMemory:
             "created_at": datetime.now().isoformat()
         }
         self.save()
+
+    def parse_plan_steps(self) -> list[dict]:
+        """
+        Legge PLAN.md e ritorna lista di step.
+
+        Returns: [
+            {"num": 1, "done": False, "desc": "crea index.html — struttura..."},
+            {"num": 2, "done": False, "desc": "crea style.css — stile..."},
+            ...
+        ]
+        """
+        plan_file = self.project_path / "PLAN.md"
+        if not plan_file.exists():
+            return []
+
+        steps = []
+        try:
+            for line in plan_file.read_text(encoding='utf-8').splitlines():
+                m = re.match(r'-\s*\[([ x])\]\s*Step(\d+):\s*(.+)', line, re.IGNORECASE)
+                if m:
+                    steps.append({
+                        "num": int(m.group(2)),
+                        "done": m.group(1) == 'x',
+                        "desc": m.group(3).strip()
+                    })
+        except Exception:
+            pass
+        return sorted(steps, key=lambda x: x["num"])
+
+    def mark_step_done(self, step_num: int):
+        """Aggiorna PLAN.md: [ ] → [x] per lo step_num specificato."""
+        plan_file = self.project_path / "PLAN.md"
+        if not plan_file.exists():
+            return
+
+        try:
+            content = plan_file.read_text(encoding='utf-8')
+            content = re.sub(
+                rf'(\[\s\])(\s*Step{step_num}:)',
+                rf'[x]\2',
+                content,
+                count=1,
+                flags=re.IGNORECASE
+            )
+            plan_file.write_text(content, encoding='utf-8')
+        except Exception:
+            pass
+
+    def get_interface_contract(self) -> str:
+        """Legge INTERFACE_CONTRACT.md (max 300 char)."""
+        f = self.project_path / "INTERFACE_CONTRACT.md"
+        if f.exists():
+            try:
+                return f.read_text(encoding='utf-8')[:300]
+            except Exception:
+                pass
+        return ""
+
+    def get_file_digest(self) -> str:
+        """
+        Digest ultraleggero dei file creati (~80 token).
+        NON carica il codice completo — solo struttura.
+        """
+        lines = []
+        try:
+            for ext in ['.html', '.css', '.js', '.py']:
+                for f in self.project_path.glob(f"*{ext}"):
+                    if f.is_file():
+                        content = f.read_text(encoding='utf-8', errors='replace')[:2000]
+                        num_lines = content.count('\n')
+                        ids = re.findall(r'id=["\']([^"\']+)["\']', content)[:4]
+                        funcs = re.findall(r'(?:function|def)\s+(\w+)\s*\(', content)[:4]
+                        classes = re.findall(r'class=["\']([^"\']+)["\']', content)[:3]
+
+                        digest = f"# {f.name} ({num_lines} righe)"
+                        if ids:
+                            digest += f" | IDs: {','.join(ids)}"
+                        if funcs:
+                            digest += f" | funcs: {','.join(funcs)}"
+                        if classes:
+                            digest += f" | cls: {','.join(classes)}"
+                        lines.append(digest)
+        except Exception:
+            pass
+
+        return "\n".join(lines)
