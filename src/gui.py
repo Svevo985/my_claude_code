@@ -301,14 +301,23 @@ class OllamaBridgeGUI:
 
     def _load_config(self) -> dict:
         if CONFIG_FILE.exists():
-            return json.loads(CONFIG_FILE.read_text(encoding='utf-8'))
-        return {
+            cfg = json.loads(CONFIG_FILE.read_text(encoding='utf-8'))
+        else:
+            cfg = {
             "ollama": {
                 "base_url": "http://localhost:11434",
                 "model": "llama3.2",
                 "timeout": 1800
             }
         }
+        wf = cfg.setdefault("workflow", {})
+        wf.setdefault("plan_num_predict", 900)
+        wf.setdefault("plan_max_response_chars", 20000)
+        wf.setdefault("plan_max_retries", 2)
+        wf.setdefault("step_num_predict", 1200)
+        wf.setdefault("step_max_response_chars", 20000)
+        wf.setdefault("max_step_retries", 2)
+        return cfg
 
     def _load_state(self) -> dict:
         if STATE_FILE.exists():
@@ -1713,323 +1722,828 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
 
         threading.Thread(target=process, daemon=True).start()
 
-    def _execute_direct_workflow(self, user_message, project_path):
-        """Workflow a 2 fasi con memoria di progetto per coerenza tra step."""
+    def _workflow_settings(self) -> dict:
+        wf = self.config.get("workflow", {}) if isinstance(self.config, dict) else {}
+        plan_num_predict = wf.get("plan_num_predict", 900)
+        plan_max_response_chars = wf.get("plan_max_response_chars", 20000)
+        plan_max_retries = wf.get("plan_max_retries", 2)
+        step_num_predict = wf.get("step_num_predict", 1200)
+        step_max_response_chars = wf.get("step_max_response_chars", 20000)
+        max_step_retries = wf.get("max_step_retries", 2)
+
         try:
-            logger.info(f"=== INIZIO WORKFLOW CON MEMORIA ===")
-            logger.info(f"Modello planner: {self.ollama.model}")
+            plan_num_predict = int(plan_num_predict)
+        except Exception:
+            plan_num_predict = 900
+        try:
+            plan_max_response_chars = int(plan_max_response_chars)
+        except Exception:
+            plan_max_response_chars = 20000
+        try:
+            plan_max_retries = int(plan_max_retries)
+        except Exception:
+            plan_max_retries = 2
+        try:
+            step_num_predict = int(step_num_predict)
+        except Exception:
+            step_num_predict = 1200
+        try:
+            step_max_response_chars = int(step_max_response_chars)
+        except Exception:
+            step_max_response_chars = 20000
+        try:
+            max_step_retries = int(max_step_retries)
+        except Exception:
+            max_step_retries = 2
+
+        return {
+            "plan_num_predict": max(256, plan_num_predict),
+            "plan_max_response_chars": max(1000, plan_max_response_chars),
+            "plan_max_retries": max(0, plan_max_retries),
+            "step_num_predict": max(256, step_num_predict),
+            "step_max_response_chars": max(1000, step_max_response_chars),
+            "max_step_retries": max(0, max_step_retries),
+        }
+
+    def _infer_project_name(self, user_message: str) -> str:
+        m = re.search(r"(?:crea|create|build)\s+([a-zA-Z0-9 _.-]{3,60})", user_message, re.IGNORECASE)
+        if m:
+            name = m.group(1).strip(" .:-")
+            if name:
+                return name
+        if "tris" in user_message.lower():
+            return "Gioco del Tris"
+        return "Nuovo Progetto"
+
+    def _build_planning_prompt(self, user_message: str) -> str:
+        return f"""Sei un software architect senior.
+
+Genera SOLO un JSON valido (nessun testo extra).
+
+SCHEMA OBBLIGATORIO:
+{{
+  "app_summary": ["...", "..."],
+  "steps": [
+    {{
+      "num": 1,
+      "filename": "nome_file.estensione",
+      "goal": "descrizione funzionale del file",
+      "key_refs": ["riferimento 1", "riferimento 2"],
+      "acceptance_checks": ["check 1", "check 2"]
+    }}
+  ]
+}}
+
+REGOLE:
+- Nessun codice sorgente.
+- Nessun comando shell/powershell.
+- Massimo 8 step.
+- Ogni step crea un solo file.
+- filename deve avere estensione.
+- acceptance_checks deve contenere da 2 a 4 check concreti.
+- num deve essere progressivo (1..N).
+
+Progetto richiesto: {user_message}"""
+
+    def _sanitize_llm_response(self, text: str) -> str:
+        clean = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL | re.IGNORECASE)
+        clean = re.sub(r"^```(?:json)?\s*", "", clean.strip(), flags=re.IGNORECASE)
+        clean = re.sub(r"\s*```$", "", clean.strip(), flags=re.DOTALL)
+        return clean.strip()
+
+    def _extract_first_json_object(self, text: str) -> dict | None:
+        clean = self._sanitize_llm_response(text)
+        if not clean:
+            return None
+
+        start = clean.find("{")
+        if start < 0:
+            return None
+
+        candidate = clean[start:]
+        depth = 0
+        in_string = False
+        escape_next = False
+
+        for idx, char in enumerate(candidate):
+            if escape_next:
+                escape_next = False
+                continue
+
+            if char == "\\":
+                if in_string:
+                    escape_next = True
+                continue
+
+            if char == '"':
+                in_string = not in_string
+                continue
+
+            if in_string:
+                continue
+
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    raw_json = candidate[:idx + 1]
+                    try:
+                        obj = json.loads(raw_json)
+                        return obj if isinstance(obj, dict) else None
+                    except Exception:
+                        return None
+        return None
+
+    def _validate_plan_schema(self, plan_obj: dict | None) -> tuple[bool, str | None, dict | None]:
+        if not isinstance(plan_obj, dict):
+            return False, "Plan non e' un oggetto JSON", None
+
+        app_summary = plan_obj.get("app_summary")
+        steps = plan_obj.get("steps")
+
+        if not isinstance(app_summary, list) or not app_summary:
+            return False, "Campo app_summary mancante o non valido", None
+        summary_clean = [str(s).strip() for s in app_summary if str(s).strip()]
+        if len(summary_clean) < 1:
+            return False, "app_summary vuoto", None
+
+        if not isinstance(steps, list) or not steps:
+            return False, "Campo steps mancante o non valido", None
+
+        normalized_steps: list[dict] = []
+        seen_filenames: set[str] = set()
+
+        for idx, raw_step in enumerate(steps, 1):
+            if not isinstance(raw_step, dict):
+                return False, f"Step {idx} non e' oggetto", None
+
+            raw_num = raw_step.get("num")
+            filename = Path(str(raw_step.get("filename", "")).strip()).name
+            goal = str(raw_step.get("goal", "")).strip()
+            key_refs = raw_step.get("key_refs")
+            acceptance_checks = raw_step.get("acceptance_checks")
+
+            if not isinstance(raw_num, int):
+                return False, f"Step {idx}: num non valido", None
+            if not filename or "." not in filename:
+                return False, f"Step {idx}: filename non valido", None
+            if filename.lower() in seen_filenames:
+                return False, f"Step {idx}: filename duplicato ({filename})", None
+            if not goal:
+                return False, f"Step {idx}: goal mancante", None
+            if not isinstance(key_refs, list) or not key_refs:
+                return False, f"Step {idx}: key_refs mancanti", None
+            if not isinstance(acceptance_checks, list):
+                return False, f"Step {idx}: acceptance_checks mancanti", None
+
+            key_refs_clean = [str(x).strip() for x in key_refs if str(x).strip()]
+            checks_clean = [str(x).strip() for x in acceptance_checks if str(x).strip()]
+            if not key_refs_clean:
+                return False, f"Step {idx}: key_refs vuoti", None
+            if len(checks_clean) < 2 or len(checks_clean) > 4:
+                return False, f"Step {idx}: acceptance_checks deve avere 2-4 elementi", None
+
+            seen_filenames.add(filename.lower())
+            normalized_steps.append({
+                "num": raw_num,
+                "filename": filename,
+                "goal": goal,
+                "plan_references": key_refs_clean[:10],
+                "acceptance_checks": checks_clean[:4],
+                "status": "pending",
+            })
+
+        normalized_steps = sorted(normalized_steps, key=lambda s: s["num"])
+        for i, step in enumerate(normalized_steps, 1):
+            if step["num"] != i:
+                return False, "Numerazione step non progressiva", None
+
+        return True, None, {
+            "app_summary": summary_clean[:3],
+            "steps": normalized_steps[:8],
+        }
+
+    def _render_claude_md(self, app_summary: list[str], steps: list[dict]) -> str:
+        lines: list[str] = []
+        lines.append("## App Summary")
+        for point in app_summary[:3]:
+            lines.append(f"- {point}")
+        lines.append("")
+        lines.append("## Steps")
+        for step in steps:
+            lines.append(f"### Step {step['num']} - `{step['filename']}`")
+            lines.append(f"Goal: {step.get('goal', '')}")
+            lines.append("Key references:")
+            refs = step.get("plan_references") or []
+            for ref in refs:
+                lines.append(f"- {ref}")
+            lines.append("Acceptance checks:")
+            checks = step.get("acceptance_checks") or []
+            for check in checks:
+                lines.append(f"- {check}")
+            lines.append("")
+        return "\n".join(lines).strip() + "\n"
+
+    def _sanitize_plan_response(self, plan_resp: str) -> str:
+        clean = re.sub(r"<think>.*?</think>", "", plan_resp or "", flags=re.DOTALL | re.IGNORECASE).strip()
+        cleaned_lines = []
+        for line in clean.splitlines():
+            low = line.lower()
+            if "vietato" in low and "step" not in low:
+                continue
+            if "non scrivere codice" in low:
+                continue
+            cleaned_lines.append(line)
+        return "\n".join(cleaned_lines).strip()
+
+    def _extract_summary_points(self, plan_text: str) -> list[str]:
+        summary_points: list[str] = []
+        summary_match = re.search(
+            r"##\s*(?:App\s*Summary|Descrizione\s*Progetto|Sommario)\s*(.*?)(?=\n##\s*Steps|\Z)",
+            plan_text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if summary_match:
+            for line in summary_match.group(1).splitlines():
+                stripped = line.strip()
+                if re.match(r"^[-*]\s+", stripped):
+                    summary_points.append(re.sub(r"^[-*]\s+", "", stripped).strip())
+                elif stripped and len(summary_points) < 3:
+                    summary_points.append(stripped)
+        if not summary_points:
+            fallback_lines = [l.strip() for l in plan_text.splitlines() if l.strip()]
+            summary_points = fallback_lines[:3]
+        return summary_points[:3]
+
+    def _parse_plan_steps(self, plan_text: str) -> dict:
+        steps: list[dict] = []
+        summary_points = self._extract_summary_points(plan_text)
+
+        step_pattern = re.compile(
+            r"###\s*Step\s*(\d+)\s*[-:]\s*`([^`]+)`\s*(.*?)(?=\n###\s*Step\s*\d+|\Z)",
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        for match in step_pattern.finditer(plan_text):
+            step_num = int(match.group(1))
+            filename = Path(match.group(2).strip()).name
+            body = match.group(3).strip()
+
+            goal = ""
+            goal_match = re.search(r"(?:Goal|Scopo)\s*:\s*(.+)", body, re.IGNORECASE)
+            if goal_match:
+                goal = goal_match.group(1).strip()
+            if not goal:
+                for line in body.splitlines():
+                    candidate = line.strip(" -*\t")
+                    if not candidate:
+                        continue
+                    if candidate.lower().startswith("key references"):
+                        continue
+                    goal = candidate
+                    break
+            if not goal:
+                goal = f"Implementa il file {filename}"
+
+            plan_references: list[str] = []
+            in_refs = False
+            for raw_line in body.splitlines():
+                line = raw_line.strip()
+                if re.match(r"^Key\s*references?\s*:", line, re.IGNORECASE):
+                    in_refs = True
+                    tail = line.split(":", 1)[1].strip()
+                    if tail:
+                        plan_references.append(tail)
+                    continue
+                if in_refs:
+                    if line.startswith("-") or line.startswith("*"):
+                        plan_references.append(line[1:].strip())
+                        continue
+                    if not line:
+                        continue
+                    if re.match(r"^[A-Za-z ]+\s*:", line):
+                        break
+                    plan_references.append(line)
+
+            steps.append({
+                "num": step_num,
+                "filename": filename,
+                "goal": goal,
+                "plan_references": plan_references[:8],
+                "status": "pending",
+            })
+
+        if not steps:
+            fallback_files: list[tuple[int, str, str]] = []
+            seen_files: set[str] = set()
+            for line in plan_text.splitlines():
+                m = re.search(r"`([^`]+\.[A-Za-z0-9_-]+)`", line)
+                if not m:
+                    continue
+                filename = Path(m.group(1).strip()).name
+                if filename.lower() in seen_files:
+                    continue
+                seen_files.add(filename.lower())
+                fallback_files.append((len(fallback_files) + 1, filename, line.strip()))
+
+            for num, filename, raw_goal in fallback_files:
+                steps.append({
+                    "num": num,
+                    "filename": filename,
+                    "goal": raw_goal or f"Implementa il file {filename}",
+                    "plan_references": [],
+                    "status": "pending",
+                })
+
+        steps = sorted(steps, key=lambda s: s["num"])
+        for idx, step in enumerate(steps, 1):
+            step["num"] = idx
+
+        return {
+            "app_summary": summary_points,
+            "steps": steps,
+        }
+
+    def _step_context_file(self, project_path: Path) -> Path:
+        return project_path / "STEP_CONTEXT.json"
+
+    def _write_step_context(self, project_path: Path, context: dict) -> None:
+        context["last_updated"] = datetime.now().isoformat()
+        self._step_context_file(project_path).write_text(
+            json.dumps(context, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def _init_step_context(self, project_path: Path, app_summary: list[str], steps: list[dict]) -> dict:
+        ordered_steps = []
+        for step in sorted(steps, key=lambda s: s["num"]):
+            ordered_steps.append({
+                "num": step["num"],
+                "filename": step["filename"],
+                "goal": step.get("goal", f"Implementa il file {step['filename']}"),
+                "status": "pending",
+                "plan_references": step.get("plan_references", []),
+                "acceptance_checks": step.get("acceptance_checks", []),
+            })
+
+        context = {
+            "app_summary": app_summary[:3],
+            "steps": ordered_steps,
+            "current_step": ordered_steps[0]["num"] if ordered_steps else None,
+            "key_references_by_file": {},
+            "last_updated": datetime.now().isoformat(),
+        }
+        self._write_step_context(project_path, context)
+        return context
+
+    def _set_step_status(self, project_path: Path, context: dict, step_num: int, status: str) -> None:
+        for step in context.get("steps", []):
+            if step.get("num") == step_num:
+                step["status"] = status
+                break
+
+        if status == "done":
+            next_pending = next((s["num"] for s in context.get("steps", []) if s.get("status") == "pending"), None)
+            context["current_step"] = next_pending
+        else:
+            context["current_step"] = step_num
+
+        self._write_step_context(project_path, context)
+
+    def _collect_key_references(self, memory: ProjectMemory) -> dict:
+        key_refs: dict = {}
+        contracts = memory.get_all_contracts() if memory else {}
+        for filename, info in contracts.items():
+            elements = (info or {}).get("elements", {})
+            extracted: dict = {}
+            for key in ["ids", "classes", "functions", "variables", "selectors", "used_ids", "used_classes"]:
+                values = elements.get(key) or []
+                cleaned = sorted(set(str(v).strip() for v in values if str(v).strip()))
+                if cleaned:
+                    extracted[key] = cleaned
+            for key in ["has_css_link", "has_js_link", "has_inline_style", "has_inline_script"]:
+                if key in elements and elements.get(key):
+                    extracted[key] = elements[key][0]
+            if extracted:
+                key_refs[filename] = extracted
+        return key_refs
+
+    def _format_key_reference_lines(self, refs: dict) -> list[str]:
+        lines: list[str] = []
+        labels = {
+            "ids": "ids",
+            "classes": "classes",
+            "functions": "functions",
+            "variables": "variables",
+            "selectors": "selectors",
+            "used_ids": "used_ids",
+            "used_classes": "used_classes",
+            "has_css_link": "has_css_link",
+            "has_js_link": "has_js_link",
+            "has_inline_style": "has_inline_style",
+            "has_inline_script": "has_inline_script",
+        }
+        for key, label in labels.items():
+            if key not in refs:
+                continue
+            value = refs[key]
+            if isinstance(value, list):
+                lines.append(f"- {label}: {', '.join(value[:12])}")
+            else:
+                lines.append(f"- {label}: {value}")
+        return lines
+
+    def _build_step_brief(self, user_message: str, step_context: dict, step: dict, key_references_by_file: dict) -> str:
+        summary = step_context.get("app_summary") or [user_message]
+        step_lines = []
+        for s in step_context.get("steps", []):
+            status = s.get("status", "pending")
+            step_lines.append(f"- Step {s.get('num')}: {s.get('filename')} [{status}]")
+
+        prev_files = [
+            s.get("filename")
+            for s in step_context.get("steps", [])
+            if s.get("num", 0) < step.get("num", 0) and s.get("status") == "done"
+        ]
+
+        ref_lines: list[str] = []
+        for filename in prev_files:
+            refs = key_references_by_file.get(filename)
+            if not refs:
+                continue
+            ref_lines.append(f"{filename}:")
+            ref_lines.extend(self._format_key_reference_lines(refs))
+
+        if not ref_lines:
+            ref_lines = ["- Nessun riferimento disponibile dai file precedenti."]
+
+        plan_refs = step.get("plan_references", [])
+        plan_ref_lines = [f"- {r}" for r in plan_refs] if plan_refs else ["- Nessun riferimento aggiuntivo nel piano."]
+        acceptance = step.get("acceptance_checks", [])
+        acceptance_lines = [f"- {a}" for a in acceptance] if acceptance else ["- Nessun check definito."]
+
+        summary_lines = [f"{idx}. {item}" for idx, item in enumerate(summary, 1)]
+
+        return "\n".join([
+            "STIAMO FACENDO QUESTA APPLICAZIONE:",
+            *summary_lines,
+            "",
+            "STATO STEP:",
+            *step_lines,
+            "",
+            f"ADESSO SIAMO NELLO STEP {step['num']}: implementa `{step['filename']}`.",
+            f"Obiettivo dello step: {step.get('goal', '')}",
+            "",
+            "RIFERIMENTI CHIAVE DAI FILE PRECEDENTI:",
+            *ref_lines,
+            "",
+            "RIFERIMENTI CHIAVE NEL PIANO PER QUESTO STEP:",
+            *plan_ref_lines,
+            "",
+            "ACCEPTANCE CHECKS STEP CORRENTE:",
+            *acceptance_lines,
+        ])
+
+    def _build_step_file_rules(self, filename: str) -> str:
+        ext = Path(filename).suffix.lower().lstrip(".")
+        if ext == "html":
+            return """REGOLE FILE HTML:
+- Scrivi HTML completo e valido.
+- Non usare placeholder o testo descrittivo al posto del codice.
+- Se il piano richiede file esterni, includi i riferimenti necessari."""
+        if ext == "css":
+            return """REGOLE FILE CSS:
+- Solo CSS, nessun HTML o JS.
+- Nessun placeholder.
+- Mantieni coerenza con ID/classi dichiarate nei riferimenti chiave."""
+        if ext in {"js", "ts"}:
+            return """REGOLE FILE JS/TS:
+- Solo codice JS/TS, nessun markdown.
+- Funzioni complete, nessun placeholder.
+- Mantieni coerenza con i riferimenti chiave."""
+        if ext == "py":
+            return """REGOLE FILE PY:
+- Solo codice Python valido.
+- Nessun placeholder.
+- Mantieni il file autosufficiente per il suo scopo."""
+        return """REGOLE FILE:
+- Scrivi solo il contenuto completo del file richiesto.
+- Nessun placeholder, nessuna spiegazione."""
+
+    def _build_step_user_prompt(self, step: dict, total_steps: int, brief: str, file_rules: str) -> str:
+        filename = step["filename"]
+        return f"""{brief}
+
+{file_rules}
+
+VINCOLI DI OUTPUT:
+- Devi creare SOLO il file `{filename}`.
+- Rispondi SOLO con JSON valido.
+- Nessun testo extra fuori dal JSON.
+- Usa comandi compatibili con PowerShell.
+- Obbligatorio usare chiavi cmd1/cmd2/cmd3...
+- Vietato usare placeholder (es. CONTENUTO_COMPLETO).
+
+Siamo allo step {step['num']}/{total_steps}."""
+
+    def _build_step_retry_hint(self, filename: str, parse_error: str) -> str:
+        reason = (parse_error or "errore non specificato").strip()
+        return (
+            "\n\nCORREZIONE OBBLIGATORIA:\n"
+            f"- Errore precedente: {reason}\n"
+            f"- File target obbligatorio: `{filename}`\n"
+            "- Output solo oggetto JSON con cmd1/cmd2...\n"
+            "- Nessun testo extra, nessun markdown, nessun placeholder.\n"
+        )
+
+    def _extract_command_target_filename(self, cmd: str) -> str | None:
+        cmd_str = (cmd or "").strip()
+
+        if cmd_str.startswith("Set-Content") or cmd_str.startswith("Add-Content"):
+            p_match = re.search(r"-Path\s+'([^']*)'", cmd_str)
+            if not p_match:
+                p_match = re.search(r"-Path\s+\"([^\"]*)\"", cmd_str)
+            if p_match:
+                return Path(p_match.group(1)).name
+            return None
+
+        heredoc_match = re.search(r"cat\s+<<\s*'?EOF'?\s*>\s*(.+?)(?:\s*\n|\s*\\n)", cmd_str)
+        if heredoc_match:
+            return Path(heredoc_match.group(1).strip().strip("'\"")).name
+
+        return None
+
+    def _commands_target_expected_file(self, commands: list[str], expected_filename: str) -> bool:
+        expected = Path(expected_filename).name.lower()
+        found_write_command = False
+        for cmd in commands:
+            target = self._extract_command_target_filename(cmd)
+            if not target:
+                continue
+            found_write_command = True
+            if Path(target).name.lower() != expected:
+                return False
+        return found_write_command
+
+    def _execute_direct_workflow(self, user_message, project_path):
+        """Workflow deterministico a step: plan -> parse steps -> execute step -> update STEP_CONTEXT."""
+        try:
+            logger.info("=== INIZIO STEP WORKFLOW DETERMINISTICO ===")
+            logger.info(f"Modello workflow: {self.ollama.model}")
             logger.info(f"User message: {user_message[:200]}")
             logger.info(f"Project path: {project_path}")
-            
-            self.root.after(0, lambda: self._add_message("\n🧠 FASE 1: PIANIFICAZIONE CON MEMORIA...", "info"))
-            
-            # Costruisci il path del progetto
+
+            self.root.after(0, lambda: self._add_message("\n[STEP] FASE 1: PIANIFICAZIONE FUNZIONALE...", "info"))
+
+            wf = self._workflow_settings()
             p_path = project_path or Path(".")
             p_path.mkdir(parents=True, exist_ok=True)
-            
-            # Inizializza memoria di progetto
+
             memory = ProjectMemory(p_path)
-            memory.clear()  # Pulisci memoria precedente
-            
-            # Estrai info dal messaggio utente
-            project_name = "Progetto"
-            if "tris" in user_message.lower():
-                project_name = "Gioco del Tris"
-            elif "calcolatrice" in user_message.lower():
-                project_name = "Calcolatrice"
-            
-            memory.set_project_info(project_name, user_message[:200])
-            logger.info(f"Memoria inizializzata per: {project_name}")
-            
-            # Prompt SOLO per pianificazione - SENZA codice, SOLO contratti
-            plan_prompt = f"""Sei un software architect senior. Il tuo compito è creare un PIANO ARCHITETTURALE con CONTRATTI tra file.
+            memory.clear()
+            project_name = self._infer_project_name(user_message)
+            memory.set_project_info(project_name, user_message[:400])
 
-⚠️ REGOLE ASSOLUTE:
-- ❌ VIETATO scrivere codice in qualsiasi forma
-- ❌ VIETATO scrivere frammenti CSS, JS, HTML
-- ❌ VIETATO scrivere comandi PowerShell
-- ✅ SCRIVI SOLO descrizioni testuali di COSA deve contenere ogni file
-- ✅ DEFINISCI i contratti: ID, classi, nomi funzioni che i file si scambiano
-
-PROGETTO: {user_message}
-
-FORMATO OUTPUT RICHIESTO:
-
-## Descrizione Progetto
-[2-3 righe che spiegano COSA fa l'applicazione]
-
-## File Da Creare
-
-### index.html
-Scopo: [descrizione verbale dello scopo]
-Elementi richiesti:
-- Container principale con ID "app" o "game-container"
-- Griglia 3x3 con 9 celle, ognuna con classe "cell" e data-index da 0 a 8
-- Display stato con ID "status" che mostra il turno corrente
-- Bottone reset con ID "reset-btn"
-- Link a style.css nel <head>
-- Link a script.js prima di </body>
-NON scrivere: codice HTML, tag, attributi completi
-
-### style.css
-Scopo: [descrizione verbale]
-Elementi da stilizzare:
-- Selettore: .cell (100px, flexbox per centrare, bordo, hover effect)
-- Selettore: #status (font grande, colore)
-- Selettore: #reset-btn (padding, background, hover)
-- Layout: grid 3x3 per il board
-NON scrivere: regole CSS complete, valori esatti
-
-### script.js
-Scopo: [descrizione verbale]
-Variabili globali:
-- board: array di 9 elementi
-- currentPlayer: 'X' o 'O'
-- gameActive: boolean
-Funzioni richieste:
-- handleCellClick(event): gestisce click su cella
-- checkResult(): controlla vittoria/pareggio
-- resetGame(): resetta stato
-ID da referenziare: #status, #reset-btn
-Classi da manipolare: .cell, .cell.x, .cell.o
-NON scrivere: implementazione funzioni, codice JS
-
-## Contratto tra file
-- index.html ESPONE: #status, #reset-btn, .cell[data-index]
-- style.css STILIZZA: .cell, #status, #reset-btn
-- script.js MANIPOLA: #status.textContent, .cell.classList, #reset-btn.addEventListener
-
-Genera ORA il piano per: {user_message}"""
-
-            self.root.after(0, lambda: self._add_message("\n📝 Generazione piano...", "info"))
-
+            plan_prompt = self._build_planning_prompt(user_message)
+            plan_system = (
+                "You are a software architect. "
+                "Reply with only one valid JSON object that follows the required schema. "
+                "No markdown, no prose, no extra keys."
+            )
+            self.root.after(0, lambda: self._add_message("[STEP] Generazione piano JSON...", "info"))
             logger.info(f"=== PIANO PROMPT ===\n{plan_prompt[:2000]}")
-            plan_resp = ""
-            for chunk in self.ollama.chat([{"role": "user", "content": plan_prompt}], stream=True):
+
+            plan_data = None
+            plan_error = None
+            max_plan_retries = wf["plan_max_retries"]
+
+            for attempt in range(max_plan_retries + 1):
                 if self.stop_flag:
                     break
-                plan_resp += chunk
 
-            logger.info(f"=== PIANO RISPOSTA ({len(plan_resp)} chars) ===\n{plan_resp[:3000]}")
+                plan_messages = [
+                    {"role": "system", "content": plan_system},
+                    {"role": "user", "content": plan_prompt},
+                ]
+                logger.info(
+                    f"=== PLAN attempt {attempt + 1} === messages_count={len(plan_messages)} "
+                    f"num_predict_override={wf['plan_num_predict']}"
+                )
+
+                response = ""
+                original_predict = self.ollama.options.get("num_predict")
+                self.ollama.options["num_predict"] = wf["plan_num_predict"]
+                try:
+                    for chunk in self.ollama.chat(plan_messages, stream=True):
+                        if self.stop_flag:
+                            break
+                        response += chunk
+                finally:
+                    if original_predict is None:
+                        self.ollama.options.pop("num_predict", None)
+                    else:
+                        self.ollama.options["num_predict"] = original_predict
+
+                if self.stop_flag:
+                    break
+
+                clean_response = self._sanitize_llm_response(response)
+                logger.info(f"=== PIANO RISPOSTA ({len(clean_response)} chars) ===\n{clean_response[:3000]}")
+
+                if not clean_response:
+                    plan_error = "Piano vuoto dal modello"
+                elif len(clean_response) > wf["plan_max_response_chars"]:
+                    plan_error = (
+                        f"Risposta piano troppo lunga ({len(clean_response)} > {wf['plan_max_response_chars']})"
+                    )
+                else:
+                    plan_obj = self._extract_first_json_object(clean_response)
+                    ok_schema, schema_error, normalized = self._validate_plan_schema(plan_obj)
+                    if ok_schema and normalized:
+                        plan_data = normalized
+                        plan_error = None
+                        break
+                    plan_error = schema_error or "Schema piano non valido"
+
+                if attempt < max_plan_retries:
+                    logger.warning(f"PLAN retry {attempt + 1}: {plan_error}")
+                    self.root.after(0, lambda a=attempt + 1: self._add_message(f"[RETRY PLAN] {a}", "warning"))
+                    plan_prompt += (
+                        "\n\nATTENZIONE: OUTPUT NON VALIDO.\n"
+                        f"Errore: {plan_error}\n"
+                        "Riprova: SOLO JSON schema richiesto, senza testo extra."
+                    )
+                else:
+                    logger.error(f"Piano fallito: {plan_error}")
 
             if self.stop_flag:
                 return
 
-            if not plan_resp.strip():
-                logger.error("ERRORE: risposta del piano è VUOTA. Il modello non ha risposto nulla.")
-                self.root.after(0, lambda: self._add_message("❌ Risposta piano vuota - controlla i log", "error"))
+            if not plan_data:
+                self.root.after(0, lambda e=plan_error or "Piano non disponibile": self._add_message(f"[ERR] {e}", "error"))
+                return
 
-            # Salva il piano
-            plan_file = p_path / "claude_plan.md"
-            plan_file.write_text(plan_resp, encoding="utf-8", errors="replace")
-            logger.info(f"Piano salvato ({len(plan_resp)} chars)")
-            self.root.after(0, lambda: self._add_message(f"📝 Piano salvato", "success"))
-            
-            # Estrai nomi file dal piano
-            import re
-            file_patterns = {
-                'index.html': r'(?:index\.html|html)',
-                'style.css': r'(?:style\.css|css)',
-                'script.js': r'(?:script\.js|js)'
-            }
-            
-            steps = []
-            for filename, pattern in file_patterns.items():
-                if re.search(pattern, plan_resp, re.IGNORECASE):
-                    steps.append(filename)
-            
+            app_summary = plan_data.get("app_summary", [])
+            steps = plan_data.get("steps", [])
+
             if not steps:
-                steps = ['index.html', 'style.css', 'script.js']  # Default per web projects
-            
-            logger.info(f"Step da eseguire: {steps}")
-            
-            # FASE 2: Esecuzione con memoria
-            self.root.after(0, lambda: self._add_message(f"\n🚀 FASE 2: ESECUZIONE {len(steps)} FILE", "info"))
-            
-            # File creati con successo
-            created_files = []
-            
-            for i, filename in enumerate(steps, 1):
+                logger.error("Nessuno step valido nel piano JSON")
+                self.root.after(0, lambda: self._add_message("[ERR] Nessuno step valido nel piano JSON", "error"))
+                return
+
+            claude_md = p_path / "claude.md"
+            claude_md.write_text(self._render_claude_md(app_summary, steps), encoding="utf-8")
+            plan_json_file = p_path / "PLAN_SCHEMA.json"
+            plan_json_file.write_text(json.dumps(plan_data, indent=2, ensure_ascii=False), encoding="utf-8")
+            self.root.after(0, lambda: self._add_message(f"[OK] Piano salvato: {claude_md}", "success"))
+            self.root.after(0, lambda: self._add_message(f"[INFO] Schema piano: {plan_json_file.name}", "info"))
+
+            step_context = self._init_step_context(p_path, app_summary, steps)
+            self.root.after(0, lambda: self._add_message(f"[INFO] STEP_CONTEXT.json creato in {p_path}", "info"))
+            logger.info(f"Step parsati: {[s['filename'] for s in step_context['steps']]}")
+
+            created_files: list[str] = []
+            total_steps = len(step_context["steps"])
+            self.root.after(0, lambda: self._add_message(f"\n[STEP] FASE 2: ESECUZIONE {total_steps} STEP", "info"))
+
+            for step in step_context["steps"]:
                 if self.stop_flag:
                     break
-                    
-                # Ottieni memoria attuale da iniettare
-                memory_context = memory.get_memory_summary()
-                
-                # Costruisci regole specifiche per tipo file
-                ext = filename.lower().split('.')[-1] if '.' in filename else ''
-                file_rules = ""
-                if ext == 'html':
-                    file_rules = """REGOLE HTML:
-- VIETATO <style>...</style> inline
-- VIETATO <script>...</script> inline
-- OBBLIGATORIO: <link rel="stylesheet" href="style.css"> nel <head>
-- OBBLIGATORIO: <script src="script.js"></script> prima di </body>
-- Scrivi HTML completo con <!DOCTYPE html>"""
-                elif ext == 'css':
-                    file_rules = """REGOLE CSS:
-- SOLO regole CSS, niente HTML o JS
-- Ogni regola su riga separata (usa \\n tra le regole)
-- Codice completo e funzionante"""
-                elif ext == 'js':
-                    file_rules = """REGOLE JS:
-- SOLO codice JavaScript, niente HTML o CSS
-- USA SOLO virgolette DOPPIE "" per le stringhe (MAI virgolette singole '')
-- getElementById("id") e querySelectorAll(".class") con virgolette doppie
-- Funzioni complete con parentesi graffe { }
-- Codice completo e funzionante"""
 
-                step_msg = f"""## STEP {i}/{len(steps)}: CREA {filename}
+                step_num = step["num"]
+                filename = step["filename"]
+                self._set_step_status(p_path, step_context, step_num, "in_progress")
 
-Piano: {plan_resp[:800]}
+                key_refs = self._collect_key_references(memory)
+                step_context["key_references_by_file"] = key_refs
+                self._write_step_context(p_path, step_context)
 
-{memory_context}
+                brief = self._build_step_brief(user_message, step_context, step, key_refs)
+                file_rules = self._build_step_file_rules(filename)
+                step_msg = self._build_step_user_prompt(step, total_steps, brief, file_rules)
 
-{file_rules}
+                self.root.after(0, lambda n=step_num, fn=filename: self._add_message(f"\n[STEP] {n}/{total_steps}: {fn}", "warning"))
 
-## FORMATO OBBLIGATORIO:
-CREA SOLO {filename}. Rispondi SOLO con JSON:
-{{"cmd1": "Set-Content -Path '{filename}' -Value 'CONTENUTO_COMPLETO_QUI'"}}
-
-Escaping: ' nel contenuto = '' | newline = \\\\n | tab = \\\\t | " nel contenuto = \\\\"
-Il codice deve essere COMPLETO e FUNZIONANTE.
-"""
-                
-                self.root.after(0, lambda fn=filename, idx=i: self._add_message(f"\n▶ STEP {idx}: {fn}", "warning"))
-                
-                # Chiama LLM con retry
-                max_retries = 2
                 success = False
-                
+                max_retries = wf["max_step_retries"]
+
                 for attempt in range(max_retries + 1):
                     if self.stop_flag:
                         break
 
-                    # System prompt JSON iniettato via API (non nel modelfile)
                     exec_system = (
                         "You are a senior software engineer. "
                         "Reply ONLY with a valid JSON object like: "
-                        "{\"cmd1\": \"Set-Content -Path 'filename' -Value 'content'\"}. "
-                        "Escape single quotes inside content as ''. "
-                        "Use \\n for newlines. No explanations, no markdown, no text outside JSON."
+                        "{\\\"cmd1\\\": \\\"Set-Content -Path 'file' -Value 'content'\\\"}. "
+                        "No markdown, no explanations, no extra text."
                     )
                     exec_messages = [
                         {"role": "system", "content": exec_system},
-                        {"role": "user", "content": step_msg}
+                        {"role": "user", "content": step_msg},
                     ]
 
-                    logger.info(f"=== STEP {i} attempt {attempt+1}: invio prompt ({len(step_msg)} chars) ===\n{step_msg[:1500]}")
+                    logger.info(
+                        f"=== STEP {step_num} attempt {attempt + 1} === messages_count={len(exec_messages)} "
+                        f"num_predict_override={wf['step_num_predict']}"
+                    )
 
                     response = ""
-                    for chunk in self.ollama.chat(exec_messages, stream=True):
-                        if self.stop_flag:
-                            break
-                        response += chunk
-
-                    logger.info(f"=== STEP {i} RISPOSTA ({len(response)} chars) ===\n{response[:2000]}")
+                    original_predict = self.ollama.options.get("num_predict")
+                    self.ollama.options["num_predict"] = wf["step_num_predict"]
+                    try:
+                        for chunk in self.ollama.chat(exec_messages, stream=True):
+                            if self.stop_flag:
+                                break
+                            response += chunk
+                    finally:
+                        if original_predict is None:
+                            self.ollama.options.pop("num_predict", None)
+                        else:
+                            self.ollama.options["num_predict"] = original_predict
 
                     if self.stop_flag:
                         break
 
-                    # Rimuovi eventuali thinking tags prima del parsing
-                    clean_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL | re.IGNORECASE).strip()
+                    clean_response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL | re.IGNORECASE).strip()
+                    logger.info(f"=== STEP {step_num} RISPOSTA ({len(clean_response)} chars) ===\n{clean_response[:2000]}")
 
-                    # Estrai JSON
-                    json_match = re.search(r'\{.*\}', clean_response, re.DOTALL)
-                    if json_match:
-                        parsed = self.parser.parse(json_match.group(0))
-                        if not parsed.is_valid:
-                            logger.warning(f"JSON trovato ma non valido: {parsed.error}. JSON estratto: [{json_match.group(0)[:300]}]")
-                        if parsed.is_valid and parsed.commands:
-                            # Esegui comandi
+                    if len(clean_response) > wf["step_max_response_chars"]:
+                        logger.warning(
+                            f"STEP {step_num}: risposta troppo lunga ({len(clean_response)} > {wf['step_max_response_chars']})"
+                        )
+                        parsed = None
+                        parse_error = "Risposta troppo lunga"
+                    else:
+                        parsed = self.parser.parse(clean_response)
+                        if (not parsed.is_valid or not parsed.commands) and "{" in clean_response:
+                            parsed = self.parser.parse(clean_response[clean_response.find("{"):])
+                        parse_error = parsed.error if parsed else "Parser error"
+
+                    if parsed and parsed.is_valid and parsed.commands:
+                        if not self._commands_target_expected_file(parsed.commands, filename):
+                            parse_error = f"Comandi non allineati al file target {filename}"
+                            logger.warning(f"STEP {step_num}: {parse_error}")
+                        else:
                             for cmd in parsed.commands:
                                 ok = self._execute_command_with_fallback(cmd, p_path, filename)
                                 if ok:
-                                    # Aggiorna memoria
-                                    self._update_memory_from_file(memory, filename, response)
-                                    created_files.append(filename)
-                                    self.root.after(0, lambda fn=filename: self._add_message(f"✓ {fn} creato", "success"))
+                                    self._update_memory_from_file(memory, filename, clean_response)
+                                    if filename not in created_files:
+                                        created_files.append(filename)
+                                    self.root.after(0, lambda fn=filename: self._add_message(f"[OK] {fn} creato", "success"))
                                     success = True
                                     break
-                                else:
-                                    self.root.after(0, lambda: self._add_message("✗ Errore esecuzione", "error"))
-                        
-                        if success:
-                            break
-                        else:
-                            if attempt < max_retries:
-                                logger.warning(f"Retry {attempt+1} per {filename}")
-                                self.root.after(0, lambda a=attempt+1: self._add_message(f"🔄 Retry {a}...", "warning"))
-                                step_msg += "\n\n⚠️ RISPOSTA PRECEDENTE NON VALIDA! Riprova con JSON corretto."
+                                self.root.after(0, lambda: self._add_message("[ERR] Errore esecuzione comando", "error"))
+
+                    if success:
+                        break
+
+                    if attempt < max_retries:
+                        logger.warning(f"STEP {step_num} retry {attempt + 1}: {parse_error}")
+                        self.root.after(0, lambda a=attempt + 1: self._add_message(f"[RETRY] {a}", "warning"))
+                        step_msg += self._build_step_retry_hint(filename, parse_error)
                     else:
-                        if attempt < max_retries:
-                            logger.warning(f"Nessun JSON trovato nella risposta (attempt {attempt+1}). Risposta ricevuta: [{response[:500]}]")
-                            self.root.after(0, lambda a=attempt+1: self._add_message(f"🔄 Retry {a}...", "warning"))
-                            step_msg += "\n\n⚠️ NON hai generato JSON! Rispondi SOLO con JSON valido."
-                        else:
-                            logger.error(f"Nessun JSON trovato dopo tutti i tentativi. Ultima risposta: [{response[:1000]}]")
-                
-                if not success:
-                    logger.error(f"Fallito creazione {filename} dopo {max_retries+1} tentativi")
-                    self.root.after(0, lambda fn=filename: self._add_message(f"✗ {fn} FALLITO", "error"))
-            
-            # VALIDAZIONE FINALE
-            logger.info(f"File creati: {created_files}")
-            required_files = ['index.html', 'style.css', 'script.js']
-            missing = [f for f in required_files if f not in created_files]
-            
-            if missing:
-                self.root.after(0, lambda m=missing: self._add_message(f"⚠️ File mancanti: {', '.join(m)}", "warning"))
-                self.root.after(0, lambda: self._add_message("🔄 Tentativo recupero...", "info"))
-                
-                # Retry per file mancanti
-                for missing_file in missing:
-                    retry_msg = f"""## RECUPERO FILE MANCANTE: {missing_file}
+                        logger.error(f"STEP {step_num} fallito: {parse_error}")
 
-Il progetto NON funziona senza {missing_file}!
+                if success:
+                    self._set_step_status(p_path, step_context, step_num, "done")
+                else:
+                    self._set_step_status(p_path, step_context, step_num, "failed")
+                    memory.add_decision(f"Step {step_num} fallito per {filename}")
+                    self.root.after(0, lambda fn=filename: self._add_message(f"[FAIL] {fn} FALLITO", "error"))
 
-{memory.get_memory_summary()}
-
-## REGOLE:
-- Se {missing_file} == "style.css": SOLO CSS, selettori .cell, #status, #reset-btn
-- Se {missing_file} == "index.html": SOLO HTML con <link href="style.css"> e <script src="script.js">
-- Se {missing_file} == "script.js": SOLO JS con getElementById e querySelectorAll
-
-Genera SOLO JSON: {{"cmd1": "Set-Content -Path '{missing_file}' -Value '...'"}}"""
-                    
-                    retry_resp = ""
-                    for chunk in self.ollama.chat([{"role": "user", "content": retry_msg}], stream=True):
-                        if self.stop_flag:
-                            break
-                        retry_resp += chunk
-                    
-                    if retry_resp:
-                        json_match = re.search(r'\{.*\}', retry_resp, re.DOTALL)
-                        if json_match:
-                            parsed = self.parser.parse(json_match.group(0))
-                            if parsed.is_valid and parsed.commands:
-                                for cmd in parsed.commands:
-                                    ok = self._execute_command_with_fallback(cmd, p_path, missing_file)
-                                    if ok:
-                                        created_files.append(missing_file)
-                                        self.root.after(0, lambda fn=missing_file: self._add_message(f"✓ {fn} recuperato!", "success"))
-            
             memory.save()
-            logger.info(f"=== WORKFLOW COMPLETATO - File: {created_files} ===")
-            self.root.after(0, lambda: self._add_message("\n🎉 PROGETTO COMPLETATO", "success"))
-            self.mode = 'default'
-            
+            step_context["key_references_by_file"] = self._collect_key_references(memory)
+            remaining = [s for s in step_context["steps"] if s.get("status") == "pending"]
+            step_context["current_step"] = remaining[0]["num"] if remaining else None
+            self._write_step_context(p_path, step_context)
+
+            failed = [s["filename"] for s in step_context["steps"] if s.get("status") != "done"]
+            if not failed:
+                logger.info(f"=== WORKFLOW COMPLETATO - File: {created_files} ===")
+                self.root.after(0, lambda: self._add_message("\n[OK] PROGETTO COMPLETATO", "success"))
+            else:
+                logger.warning(f"Workflow incompleto, file non completati: {failed}")
+                self.root.after(0, lambda f=failed: self._add_message(f"[WARN] Step incompleti: {', '.join(f)}", "warning"))
+
+            self.mode = "default"
+
         except Exception as exc:
-            logger.error(f"ERRORE: {exc}")
-            self.root.after(0, lambda e=str(exc): self._add_message(f"❌ ERRORE: {e}", "error"))
-        
+            logger.error(f"ERRORE WORKFLOW: {exc}")
+            self.root.after(0, lambda e=str(exc): self._add_message(f"[ERR] ERRORE: {e}", "error"))
+
         finally:
             self.is_thinking = False
             self.stop_flag = False
             self.root.after(0, lambda: self.thinking_anim.stop())
-            self.root.after(0, lambda: self._set_status("● Connesso", "success"))
+            self.root.after(0, lambda: self._set_status("Connesso", "success"))
             self.root.after(0, lambda: self.send_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
+
+    def _execute_agentic_workflow(self, user_message, project_path):
+        """Instrada sempre al workflow deterministico step-by-step."""
+        return self._execute_direct_workflow(user_message, project_path)
 
     def _execute_command_with_fallback(self, cmd: str, p_path: Path, filename: str) -> bool:
         """Esegue comando con fallback Python nativo, parsing robusto e VALIDAZIONE."""
@@ -2045,6 +2559,13 @@ Genera SOLO JSON: {{"cmd1": "Set-Content -Path '{missing_file}' -Value '...'"}}"
                 if not p_match:
                     logger.error(f"❌ Nessun -Path trovato nel comando")
                     return False
+                target_name = Path(p_match.group(1)).name
+                expected_name = Path(filename).name
+                if target_name.lower() != expected_name.lower():
+                    logger.error(
+                        f"Comando rifiutato: target '{target_name}' diverso da step file '{expected_name}'"
+                    )
+                    return False
                 
                 # Estrai Value con parsing ROBUSTO
                 content = self._extract_value_from_command(cmd_str)
@@ -2059,7 +2580,7 @@ Genera SOLO JSON: {{"cmd1": "Set-Content -Path '{missing_file}' -Value '...'"}}"
                     return False
                 # =========================
                 
-                t_file = p_path / Path(p_match.group(1)).name
+                t_file = p_path / expected_name
                 t_file.parent.mkdir(parents=True, exist_ok=True)
                 mode = 'a' if cmd_str.startswith("Add-Content") else 'w'
                 with open(t_file, mode, encoding='utf-8') as f:
@@ -2074,6 +2595,13 @@ Genera SOLO JSON: {{"cmd1": "Set-Content -Path '{missing_file}' -Value '...'"}}"
             )
             if heredoc_match:
                 heredoc_path = heredoc_match.group(1).strip().strip("'\"")
+                target_name = Path(heredoc_path).name
+                expected_name = Path(filename).name
+                if target_name.lower() != expected_name.lower():
+                    logger.error(
+                        f"Heredoc rifiutato: target '{target_name}' diverso da step file '{expected_name}'"
+                    )
+                    return False
                 # Estrai contenuto tra la prima riga e EOF finale
                 # Il contenuto è tutto dopo il primo newline fino a EOF
                 first_nl = cmd_str.find('\n', heredoc_match.end())
@@ -2100,7 +2628,7 @@ Genera SOLO JSON: {{"cmd1": "Set-Content -Path '{missing_file}' -Value '...'"}}"
                         logger.error(f"❌ VALIDAZIONE FALLITA per {filename}: {validation['reason']}")
                         return False
 
-                    t_file = p_path / Path(heredoc_path).name
+                    t_file = p_path / expected_name
                     t_file.parent.mkdir(parents=True, exist_ok=True)
                     with open(t_file, 'w', encoding='utf-8') as f:
                         f.write(content)
@@ -2184,362 +2712,126 @@ Genera SOLO JSON: {{"cmd1": "Set-Content -Path '{missing_file}' -Value '...'"}}"
         return content
     
     def _validate_file_content(self, filename: str, content: str) -> dict:
-        """Valida che il contenuto del file sia valido e NON un placeholder."""
+        """Valida che il contenuto del file sia plausibile e non un placeholder."""
         stripped = content.strip()
-        
-        # Controllo 1: contenuto non vuoto/minimo
+
         if len(stripped) < 20:
             return {'valid': False, 'reason': f'Contenuto troppo corto ({len(stripped)} chars)'}
-        
-        # Controllo 2: NO placeholder
-        if stripped in ['...', '...', 'TODO', 'fixme']:
-            return {'valid': False, 'reason': 'Contenuto è un placeholder'}
-        
+
+        if stripped in ['...', 'TODO', 'fixme']:
+            return {'valid': False, 'reason': 'Contenuto placeholder'}
+
         if '...' in stripped and len(stripped) < 100:
-            return {'valid': False, 'reason': 'Contiene "..." come placeholder'}
-        
-        # Controllo 3: validazione per tipo file
+            return {'valid': False, 'reason': 'Contiene placeholder "..."'}
+
         ext = filename.lower().split('.')[-1] if '.' in filename else ''
-        
+
         if ext == 'html':
             if '<html' not in stripped.lower() and '<!doctype' not in stripped.lower():
                 return {'valid': False, 'reason': 'HTML: manca tag <html> o <!DOCTYPE>'}
-            if 'style.css' not in stripped.lower():
-                return {'valid': False, 'reason': 'HTML: manca link a style.css'}
-            if 'script.js' not in stripped.lower():
-                return {'valid': False, 'reason': 'HTML: manca script src="script.js"'}
-            if '<style>' in stripped.lower():
-                return {'valid': False, 'reason': 'HTML: CSS inline non permesso'}
-            if '<script>' in stripped.lower() and 'src=' not in stripped.lower():
-                return {'valid': False, 'reason': 'HTML: JS inline non permesso'}
-        
+
         elif ext == 'css':
             if '{' not in content or '}' not in content:
                 return {'valid': False, 'reason': 'CSS: mancano parentesi graffe'}
-            # CSS dovrebbe avere multiple righe, non tutto su una riga
             if '\n' not in content and len(stripped) > 200:
                 return {'valid': False, 'reason': 'CSS: tutto su una riga, serve newline'}
-        
-        elif ext == 'js':
-            # NO punto iniziale
+
+        elif ext in {'js', 'ts'}:
             if stripped.startswith('.'):
-                return {'valid': False, 'reason': 'JS: inizia con "." (errore parsing)'}
+                return {'valid': False, 'reason': f'{ext.upper()}: inizia con "." (errore parsing)'}
             if 'function' not in stripped.lower() and '=>' not in stripped:
-                return {'valid': False, 'reason': 'JS: manca almeno una funzione'}
-            # Controllo virgolette non chiuse - conta le virgolette singole
-            single_quotes = stripped.count("'")
-            # Se dispari, c'è una virgoletta non chiusa
-            if single_quotes % 2 != 0:
-                return {'valid': False, 'reason': f'JS: {single_quotes} virgolette singole (numero dispari = sintassi rotta)'}
-            # Controllo stringhe vuote malformate
-            if "!== '" in stripped or "== '" in stripped:
-                if "''" not in stripped:
-                    return {'valid': False, 'reason': 'JS: confronto con stringa vuota malformato (usa "" non \')'}
-        
+                return {'valid': False, 'reason': f'{ext.upper()}: manca almeno una funzione'}
+
         return {'valid': True, 'reason': 'OK'}
 
     def _update_memory_from_file(self, memory: ProjectMemory, filename: str, response: str) -> None:
-        """Aggiorna memoria basandosi sul file creato."""
-        import re
-        
-        # Estrai il contenuto effettivo dal JSON response
+        """Aggiorna memoria progetto con sole chiavi estratte (no snippet completi)."""
         content = ""
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
-        if json_match:
-            # Cerca il Value nel comando
-            value_match = re.search(r"-Value\s+'(.+)'", json_match.group(0), re.DOTALL)
-            if value_match:
-                content = value_match.group(1)
-                # Unescape
-                content = content.replace("''", "'").replace('\\n', '\n')
-        
+        clean = self._sanitize_llm_response(response)
+        parsed = self.parser.parse(clean)
+        if parsed and parsed.is_valid and parsed.commands:
+            for cmd in parsed.commands:
+                cmd_str = (cmd or "").strip()
+                if cmd_str.startswith("Set-Content") or cmd_str.startswith("Add-Content"):
+                    candidate = self._extract_value_from_command(cmd_str)
+                    if candidate:
+                        content = candidate
+                        break
+
         if not content:
-            content = response  # Fallback
-        
-        if filename == 'index.html':
-            ids = re.findall(r'id=["\']([^"\']+)["\']', content)
-            classes = re.findall(r'class=["\']([^"\']+)["\']', content)
-            has_css_link = bool(re.search(r'<link[^>]*href=["\']style\.css["\']', content))
-            has_js_link = bool(re.search(r'<script[^>]*src=["\']script\.js["\']', content))
-            has_inline_style = bool(re.search(r'<style[^>]*>.*?</style>', content, re.DOTALL))
-            has_inline_script = bool(re.search(r'<script(?![^>]*src=)[^>]*>.*?</script>', content, re.DOTALL))
-            
-            memory.register_file(filename, "Struttura HTML", {
-                "ids": ids,
-                "classes": classes,
-                "has_css_link": [str(has_css_link)],
-                "has_js_link": [str(has_js_link)],
-                "has_inline_style": [str(has_inline_style)],
-                "has_inline_script": [str(has_inline_script)]
-            })
-            
+            json_match = re.search(r'\{.*\}', clean, re.DOTALL)
+            if json_match:
+                value_match = re.search(r"-Value\s+'(.+)'", json_match.group(0), re.DOTALL)
+                if value_match:
+                    content = value_match.group(1).replace("''", "'").replace('\\n', '\n')
+
+        if not content:
+            content = clean
+
+        ext = Path(filename).suffix.lower()
+        purpose = {
+            '.html': 'Struttura HTML',
+            '.css': 'Stili CSS',
+            '.js': 'Logica JavaScript',
+            '.ts': 'Logica TypeScript',
+            '.py': 'Logica Python',
+        }.get(ext, f'File {ext or "sconosciuto"}')
+
+        elements: dict = {}
+
+        if ext == '.html':
+            ids = re.findall(r"id=[\"']([^\"']+)[\"']", content)
+            classes = re.findall(r"class=[\"']([^\"']+)[\"']", content)
+            has_css_link = bool(re.search(r"<link[^>]*href=[\"'][^\"']+\\.css[\"']", content, re.IGNORECASE))
+            has_js_link = bool(re.search(r"<script[^>]*src=[\"'][^\"']+\\.js[\"']", content, re.IGNORECASE))
+            has_inline_style = bool(re.search(r'<style[^>]*>.*?</style>', content, re.DOTALL | re.IGNORECASE))
+            has_inline_script = bool(re.search(r'<script(?![^>]*src=)[^>]*>.*?</script>', content, re.DOTALL | re.IGNORECASE))
+            elements = {
+                'ids': ids,
+                'classes': classes,
+                'has_css_link': [str(has_css_link)],
+                'has_js_link': [str(has_js_link)],
+                'has_inline_style': [str(has_inline_style)],
+                'has_inline_script': [str(has_inline_script)],
+            }
             if has_inline_style or has_inline_script:
-                logger.warning(f"⚠️ {filename} contiene CSS/JS inline!")
-                memory.add_decision(f"ATTENZIONE: {filename} ha codice inline invece di file separati")
-                
-        elif filename == 'style.css':
+                memory.add_decision(f'ATTENZIONE: {filename} contiene codice inline')
+
+        elif ext == '.css':
             selectors = re.findall(r'([.#][a-zA-Z0-9_-]+)\s*\{', content)
-            memory.register_file(filename, "Stili CSS", {
-                "selectors": selectors
-            })
-            
-        elif filename == 'script.js':
+            elements = {
+                'selectors': selectors,
+            }
+
+        elif ext in {'.js', '.ts'}:
             functions = re.findall(r'function\s+([a-zA-Z0-9_]+)', content)
+            functions += re.findall(r'([a-zA-Z0-9_]+)\s*=\s*\([^)]*\)\s*=>', content)
             variables = re.findall(r'(?:let|const|var)\s+([a-zA-Z0-9_]+)', content)
-            used_ids = re.findall(r'getElementById\(["\']([^"\']+)["\']\)', content)
-            used_classes = re.findall(r'(?:querySelectorAll|querySelector)\(["\']([^"\']+)["\']\)', content)
-            memory.register_file(filename, "Logica JavaScript", {
-                "functions": functions,
-                "variables": variables,
-                "used_ids": used_ids,
-                "used_classes": used_classes
-            })
+            used_ids = re.findall(r"getElementById\\([\"']([^\"']+)[\"']\\)", content)
+            used_classes = re.findall(r"(?:querySelectorAll|querySelector)\\([\"']([^\"']+)[\"']\\)", content)
+            elements = {
+                'functions': functions,
+                'variables': variables,
+                'used_ids': used_ids,
+                'used_classes': used_classes,
+            }
 
-    def _execute_agentic_workflow(self, user_message, project_path):
-        """Esegue il workflow in due fasi: Pianificazione + Esecuzione Iterativa."""
-        try:
-            # VERIFICA se il modello corrente è un modello "coder" completo (qwen3.5, ecc.)
-            # Se sì, salta il workflow agentic e usa il modello COME esecutore diretto
-            current_model_lower = self.ollama.model.lower()
-            is_full_coder = any(x in current_model_lower for x in ['qwen', 'coder', 'sushi'])
-            
-            if is_full_coder:
-                # ✅ USA QWEN3.5 COME PIANIFICATORE + ESECUTORE
-                return self._execute_direct_workflow(user_message, project_path)
-            
-            # Altrimenti usa il workflow agentic classico (pianificatore + esecutore separati)
-            self.root.after(0, lambda: self._add_message("\n🧠 FASE 1: PIANIFICAZIONE ARCHITETTURALE...", "info"))
-            
-            # Usa gemma:latest (o fallback) per pianificare, NON il modello 'create' con i vincoli JSON
-            planner_model = self.config.get("ollama", {}).get("planner_model", "gemma:latest")
-            installed = [m for m in self.ollama.list_models()]
-            if planner_model not in installed and installed:
-                planner_model = installed[0] 
-                
-            original_model = self.ollama.model
-            self.ollama.model = planner_model
-            self.root.after(0, lambda: self._add_message(f"Uso {planner_model} per progettare...", "system"))
-            
-            plan_prompt = f"""Sei un software architect. Dividi questo progetto in piccoli step sequenziali (max 5).
+        elif ext == '.py':
+            functions = re.findall(r'def\s+([a-zA-Z0-9_]+)\s*\(', content)
+            classes = re.findall(r'class\s+([a-zA-Z0-9_]+)\s*(?:\(|:)', content)
+            variables = re.findall(r'^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*', content, re.MULTILINE)
+            elements = {
+                'functions': functions,
+                'classes': classes,
+                'variables': variables[:20],
+            }
 
-REGOLA FONDAMENTALE:
-- DEVI DEDICARE UN SOLO FILE PER OGNI STEP (es: Step 1 solo per index.html, Step 2 solo per style.css, Step 3 solo per script.js).
-- OGNI step DEVE menzionare ESPlicitamente il nome del file con il formato: `nomefile.estensione` (con backticks!)
-- DESCRIVI il contenuto dettagliato di ogni file, NON solo la struttura generale.
-- ⚠️ IMPORTANTE: Per progetti WEB, devi avere ESATTAMENTE 3 step:
-  Step 1: `index.html` - con <link rel="stylesheet" href="style.css"> e <script src="script.js"></script>
-  Step 2: `style.css` - con tutti gli stili (layout, colori, hover, responsive)
-  Step 3: `script.js` - con tutta la logica (eventi, funzioni, condizioni)
+        else:
+            symbols = re.findall(r'(?:function|def|class)\s+([a-zA-Z0-9_]+)', content)
+            if symbols:
+                elements = {'functions': symbols}
 
-Rispondi SOLO in Markdown strutturato esattamente in questo formato:
-
-# Sommario
-Breve descrizione funzionale del progetto (2-3 righe).
-
-# Step 1
-Creazione del file `index.html`. Descrivi ESATTAMENTE cosa deve contenere: struttura HTML, elementi DOM, collegamenti a CSS/JS.
-
-# Step 2
-Creazione del file `style.css`. Descrivi gli stili completi: layout, colori, tipografia, responsive design.
-
-# Step 3
-Creazione del file `script.js`. Descrivi la logica completa: variabili, funzioni, event handler, condizioni.
-
-Progetto richiesto: {user_message}"""
-            
-            plan_resp = ""
-            for chunk in self.ollama.chat([{"role": "user", "content": plan_prompt}], stream=True):
-                if self.stop_flag: break
-                plan_resp += chunk
-                
-            # Ripristina modello rigoroso
-            self.ollama.model = original_model
-            if self.stop_flag: return
-            
-            p_path = project_path or Path(".")
-            p_path.mkdir(parents=True, exist_ok=True)
-            try:
-                (p_path / "claude_plan.md").write_text(plan_resp, encoding="utf-8", errors="replace")
-                self.root.after(0, lambda: self._add_message(f"📝 Piano salvato in {p_path / 'claude_plan.md'}", "success"))
-            except Exception as e:
-                self.root.after(0, lambda: self._add_message(f"⚠️ Impossibile salvare claude_plan.md: {e}", "warning"))
-                
-            # Parsing del piano Markdown
-            import re
-            summary_match = re.search(r'# Sommario\n(.*?)(?=\n# Step)', plan_resp, re.DOTALL | re.IGNORECASE)
-            summary = summary_match.group(1).strip() if summary_match else ""
-            
-            steps = []
-            step_matches = re.finditer(r'# Step \d+(.*?)(?=\n# Step |\Z)', plan_resp, re.DOTALL | re.IGNORECASE)
-            for m in step_matches:
-                s = m.group(1).strip()
-                if s: steps.append(s)
-                
-            if not steps:
-                steps = [plan_resp] # fallback se formatta male
-                
-            self.root.after(0, lambda: self._add_message(f"\n🚀 FASE 2: ESECUZIONE DI {len(steps)} STEP CON {self.ollama.model}", "info"))
-            
-            for i, step_text in enumerate(steps, 1):
-                if self.stop_flag: break
-                self.root.after(0, lambda idx=i: self._add_message(f"\n▶──────── STEP {idx}/{len(steps)} ────────◀", "warning"))
-                
-                # Migliora il testo dello step per essere PIÙ specifico sul file da creare
-                # Estrai il nome file dal testo dello step
-                import re
-                file_match = re.search(r'`([a-zA-Z0-9_.-]+)`', step_text)
-                file_name = file_match.group(1) if file_match else "il file richiesto"
-                
-                # Estrai l'estensione per capire il tipo
-                ext = file_name.split('.')[-1].lower() if '.' in file_name else ""
-                file_type_map = {
-                    'html': 'HTML strutturato con link a CSS/JS',
-                    'css': 'CSS con stili completi (layout, colori, hover)',
-                    'js': 'JavaScript con logica completa (eventi, funzioni, condizioni)',
-                    'py': 'Python con codice funzionante',
-                    'java': 'Java con classi complete'
-                }
-                file_desc = file_type_map.get(ext, 'codice completo')
-                
-                # Messaggi specifici in base al tipo di file
-                extra_rules = ""
-                if ext == 'html':
-                    extra_rules = "\n⚠️ DEVI INCLUDERE: <link rel='stylesheet' href='style.css'> E <script src='script.js'></script>"
-                elif ext == 'css':
-                    extra_rules = "\n⚠️ DEVI INCLUDERE: tutti gli stili (body, container, elementi, hover, responsive)"
-                elif ext == 'js':
-                    extra_rules = "\n⚠️ DEVI INCLUDERE: event listeners, funzioni principali, logica di gioco/app"
-                
-                step_msg = f"""## PROGETTO (Contesto generale):
-{summary}
-
-## STEP {i}/{len(steps)} - DEVI CREARE QUESTO FILE: {file_name}
-{step_text}
-
-## ISTRUZIONI PER CREARE {file_name}:
-- Tipo file: {file_desc}
-- Path: usa SOLO il nome '{file_name}' nel parametro -Path
-- Formato: Set-Content -Path '{file_name}' -Value 'codice_completo'
-{extra_rules}
-
-## REGOLE CRUCIALI:
-1. ✅ File DA CREARE: {file_name} (NON altri file!)
-2. ✅ CODICE COMPLETO: NO placeholder, NO '// ...', NO '/* insert code */'
-3. ✅ NEWLINE: usa \\n per andare a capo nel Value
-4. ✅ VIRGOLETTE: se il codice ha ' (apice singolo), escapalo con '' (doppio apice)
-5. ✅ PARENTESI graffe {{ }} nel CSS/JS VANNO BENISSIMO - NON escaparle!
-6. ❌ NON creare file diversi da {file_name}
-7. ❌ NON usare cat << EOF (è sintassi bash, non PowerShell!)
-8. ❌ NON saltare newline - ogni riga deve essere separata da \\n
-9. ⚠️ Il file DEVE essere COMPLETO e FUNZIONANTE da solo
-
-## ESEMPIO CORRETTO per {file_name}:
-Set-Content -Path '{file_name}' -Value 'riga 1\\nriga 2 {{ con parentesi }}\\nriga 3'
-
-## OUTPUT RICHIESTO:
-JSON con UNA SOLA chiave cmd1 (o più se necessario) contenente il comando Set-Content per {file_name}."""
-                
-                s_resp = ""
-                for chunk in self.ollama.chat([{"role": "user", "content": step_msg}], stream=True):
-                    if self.stop_flag: break
-                    s_resp += chunk
-                    
-                if self.stop_flag: break
-                
-                self.root.after(0, lambda l=len(s_resp): self._add_message(f"📝 JSON dallo step ({l} crt)", "system"))
-                
-                parsed = self.parser.parse(s_resp)
-                if parsed.is_valid and parsed.commands:
-                    for idx, cmd in enumerate(parsed.commands, 1):
-                        self.root.after(0, lambda c=cmd[:80]: self._add_message(f"⚙️ Eseguo: {c}...", "info"))
-                        
-                        cmd_str = cmd.strip()
-                        intercepted = False
-                        
-                        try:
-                            import re
-                            if cmd_str.startswith("New-Item") and "-ItemType Directory" in cmd_str:
-                                p_match = re.search(r"-Path\s+'(.*?)'", cmd_str)
-                                if p_match:
-                                    target_name = Path(p_match.group(1)).name
-                                    target_dir = p_path / target_name
-                                    target_dir.mkdir(parents=True, exist_ok=True)
-                                    self.root.after(0, lambda: self._add_message("   ✓ Directory creata (Python Native)", "success"))
-                                    intercepted = True
-                            
-                            elif cmd_str.startswith("Set-Content") or cmd_str.startswith("Add-Content"):
-                                # Estrai Path
-                                p_match = re.search(r"-Path\s+'([^']*)'", cmd_str)
-                                if not p_match:
-                                    p_match = re.search(r"-Path\s+\"([^\"]*)\"", cmd_str)
-                                
-                                # Estrai Value - APPROCCIO MIGLIORATO
-                                # Trova l'inizio di -Value
-                                v_start = cmd_str.find("-Value ")
-                                if v_start == -1:
-                                    v_start = cmd_str.find("-Value\t")
-                                
-                                if p_match and v_start != -1:
-                                    # Estrai tutto dopo -Value
-                                    value_start_pos = v_start + 7  # salta "-Value "
-                                    # Skip whitespace
-                                    while value_start_pos < len(cmd_str) and cmd_str[value_start_pos] in ' \t':
-                                        value_start_pos += 1
-                                    
-                                    # Determina il delimitatore (singola o doppia virgoletta)
-                                    if value_start_pos < len(cmd_str):
-                                        quote_char = cmd_str[value_start_pos]
-                                        if quote_char in ("'", '"'):
-                                            # Trova la virgoletta di chiusura (ultima della stringa)
-                                            content_start = value_start_pos + 1
-                                            # Cerca l'ULTIMA occorrenza della stessa virgoletta
-                                            content_end = cmd_str.rfind(quote_char)
-                                            if content_end > content_start:
-                                                content = cmd_str[content_start:content_end]
-                                                # Fix escaped quotes
-                                                if quote_char == "'":
-                                                    content = content.replace("''", "'")
-                                                elif quote_char == '"':
-                                                    content = content.replace('\\"', '"')
-                                                
-                                                # Fix newlines e tabs
-                                                content = content.replace('\\n', '\n').replace('\\t', '\t')
-                                                
-                                                # Usa solo il NOME del file
-                                                file_name = Path(p_match.group(1).replace('\\', '/').split('/')[-1]).name
-                                                t_file = p_path / file_name
-                                                t_file.parent.mkdir(parents=True, exist_ok=True)
-                                                mode = 'a' if cmd_str.startswith("Add-Content") else 'w'
-                                                with open(t_file, mode, encoding='utf-8') as f:
-                                                    f.write(content)
-                                                self.root.after(0, lambda m=mode: self._add_message(f"   ✓ File {'acceso' if m=='a' else 'scritto'} (Python Native)", "success"))
-                                                intercepted = True
-                        except Exception as e:
-                            self.root.after(0, lambda err=e: self._add_message(f"   ⚠️ Fallback nativo: {err}", "warning"))
-                            
-                        if not intercepted:
-                            ok, out = self.file_ops.execute_command(cmd)
-                            if ok:
-                                self.root.after(0, lambda: self._add_message("   ✓ Completato (Shell)", "success"))
-                            else:
-                                self.root.after(0, lambda e=out: self._add_message(f"   ✗ Errore Shell: {e}", "error"))
-                else:
-                    self.root.after(0, lambda err=parsed.error: self._add_message(f"❌ Errore parsing: {err}", "error"))
-                    self.root.after(0, lambda r=s_resp[:100]: self._add_message(f"Contenuto: {r}...", "warning"))
-            
-            self.root.after(0, lambda: self._add_message("\n🎉 PROGETTO COMPLETATO", "success"))
-            self.mode = 'default'
-            
-        except Exception as exc:
-            self.root.after(0, lambda e=str(exc): self._add_message(f"❌ ERRORE WORKFLOW: {e}", "error"))
-            
-        finally:
-            self.is_thinking = False
-            self.stop_flag = False
-            self.root.after(0, lambda: self.thinking_anim.stop())
-            self.root.after(0, lambda: self._set_status("● Connesso", "success"))
-            self.root.after(0, lambda: self.send_btn.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
+        memory.register_file(filename, purpose, elements)
 
     def _clear_chat(self):
         """Pulisce la chat e crea nuova sessione."""

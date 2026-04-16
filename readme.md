@@ -500,3 +500,30 @@ MIT License
 ---
 
 **Nota**: Questo progetto è ottimizzato per modelli locali Ollama senza supporto nativo per function calling. Per modelli con tooling (Claude, GPT), usare le API native.
+
+## Aggiornamento Operativo (2026-04-15)
+
+Stato lavori bridge step-by-step JSON:
+
+- Implementata in `src/gui.py` la nuova pipeline:
+  - PLAN con schema JSON fisso (`app_summary[]`, `steps[]` con `num`, `filename`, `goal`, `key_refs[]`, `acceptance_checks[]`)
+  - validazione schema con retry mirato
+  - generazione locale `claude.md` dal bridge (non dal testo libero del modello)
+  - STEP execution con prompt template fisso e contesto keyword-only dai file precedenti
+  - retry breve con correzione mirata in caso output non conforme
+- Aggiornato `STEP_CONTEXT.json` per includere anche `acceptance_checks`.
+- Aggiunto renderer `claude.md` e salvataggio `PLAN_SCHEMA.json`.
+- Aggiornati test unitari (`test_step_workflow.py`), tutti passati.
+
+Test reale eseguito con prompt tris su path:
+`C:\Users\VittorioVizzaccaro\OneDrive - softstrategyspa\Documenti\progetti\miei\test tris`
+
+Esito ultimo run:
+- planning OK (`claude.md` + `PLAN_SCHEMA.json` creati)
+- step 1 `index.html` OK
+- step 2 `style.css` OK (con 1 retry)
+- step 3 `script.js` FALLITO (1 retry + comando non eseguibile/valido)
+
+Modello sperimentale creato per forcing JSON:
+- `qwen3.5-9b-sushi-coder-claude-jsonbridge:latest`
+- Modelfile: `modelfiles/Modelfile_qwen35_json_bridge_claude_mf`
