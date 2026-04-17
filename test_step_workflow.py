@@ -76,6 +76,47 @@ Key references:
         self.assertTrue(self.gui._commands_target_expected_file(ok_commands, "main.py"))
         self.assertFalse(self.gui._commands_target_expected_file(bad_commands, "main.py"))
 
+    def test_execute_command_with_fallback_supports_set_content_append_switch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            ok1 = self.gui._execute_command_with_fallback(
+                "Set-Content -Path 'styles.css' -Value '.cell{width:100px;height:100px;}'",
+                p,
+                "styles.css",
+            )
+            self.assertTrue(ok1)
+            ok2 = self.gui._execute_command_with_fallback(
+                "Set-Content -Path 'styles.css' -Append -Value 'button{padding:8px;}'",
+                p,
+                "styles.css",
+            )
+            self.assertTrue(ok2)
+
+            written = (p / "styles.css").read_text(encoding="utf-8")
+            self.assertIn(".cell{width:100px;height:100px;}", written)
+            self.assertIn("button{padding:8px;}", written)
+
+    def test_execute_command_with_fallback_repairs_overescaped_js_brackets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            cmd = (
+                "Set-Content -Path 'script.js' -Value "
+                "'const winPatterns = \\[\\[0,1,2\\],\\[3,4,5\\]\\];\\n"
+                "function getFirst(){ return winPatterns\\[0\\]\\[0\\]; }'"
+            )
+            ok = self.gui._execute_command_with_fallback(cmd, p, "script.js")
+            self.assertTrue(ok)
+            written = (p / "script.js").read_text(encoding="utf-8")
+            self.assertNotIn("\\[", written)
+            self.assertNotIn("\\]", written)
+            self.assertIn("const winPatterns = [[0,1,2],[3,4,5]];", written)
+            self.assertIn("winPatterns[0][0]", written)
+
+    def test_repair_overescaped_content_does_not_touch_small_regex_like_escape(self):
+        content = "const re = /\\[[^\\]]+\\]/;"
+        repaired = self.gui._repair_probable_overescaped_content("script.js", content)
+        self.assertEqual(content, repaired)
+
     def test_validate_plan_schema_requires_acceptance_checks(self):
         plan_obj = {
             "app_summary": ["CLI note", "Persistenza JSON"],
@@ -151,6 +192,23 @@ Key references:
         self.assertTrue(self.gui._is_command_likely_truncated(truncated))
         self.assertFalse(self.gui._is_command_likely_truncated(complete))
 
+    def test_extract_value_supports_malformed_qwen_herestring(self):
+        cmd = (
+            "Set-Content -Path 'index.html' -Value @'<!DOCTYPE html>\\n"
+            "<html><body><h1>Tris</h1></body></html>'"
+        )
+        content = self.gui._extract_value_from_command(cmd)
+        self.assertIsNotNone(content)
+        self.assertIn("<!DOCTYPE html>", content)
+        self.assertIn("<h1>Tris</h1>", content)
+
+    def test_malformed_qwen_herestring_not_flagged_as_truncated_when_recoverable(self):
+        cmd = (
+            "Set-Content -Path 'styles.css' -Value @'.cell{display:grid;}\\n"
+            "#board{gap:8px;}'"
+        )
+        self.assertFalse(self.gui._is_command_likely_truncated(cmd))
+
     def test_extract_direct_file_content_from_json_cmd(self):
         response = """{
   "cmd1": "<!DOCTYPE html>\\n<html><body><h1>Tris</h1></body></html>"
@@ -208,7 +266,27 @@ Key references:
             }
             ok, reason = self.gui._validate_written_step_file(p, step_context, "style.css")
             self.assertFalse(ok)
-            self.assertIn("bottoni", reason.lower())
+            self.assertIn("azione", reason.lower())
+
+    def test_validate_written_step_file_css_allows_non_action_button_without_specific_style(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            (p / "index.html").write_text(
+                "<!DOCTYPE html><html><body><button id='hero-btn'>Learn More</button><div class='cell'></div></body></html>",
+                encoding="utf-8",
+            )
+            (p / "style.css").write_text(
+                ".cell { color: red; }",
+                encoding="utf-8",
+            )
+            step_context = {
+                "steps": [
+                    {"num": 1, "filename": "index.html", "status": "done"},
+                    {"num": 2, "filename": "style.css", "status": "in_progress"},
+                ]
+            }
+            ok, reason = self.gui._validate_written_step_file(p, step_context, "style.css")
+            self.assertTrue(ok, reason)
 
     def test_validate_written_step_file_js_requires_reset_listener(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -242,6 +320,60 @@ Key references:
             )
             ok2, reason2 = self.gui._validate_written_step_file(p, step_context, "script.js")
             self.assertTrue(ok2, reason2)
+
+    def test_validate_written_step_file_js_allows_non_action_button_without_listener(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            (p / "index.html").write_text(
+                "<!DOCTYPE html><html><body><button id='hero-btn'>Learn More</button><div id='status'></div></body></html>",
+                encoding="utf-8",
+            )
+            (p / "script.js").write_text(
+                "const status = document.getElementById('status');\n"
+                "function render(){ status.textContent='ok'; }\n",
+                encoding="utf-8",
+            )
+            step_context = {
+                "steps": [
+                    {"num": 1, "filename": "index.html", "status": "done"},
+                    {"num": 2, "filename": "script.js", "status": "in_progress"},
+                ]
+            }
+            ok, reason = self.gui._validate_written_step_file(p, step_context, "script.js")
+            self.assertTrue(ok, reason)
+
+    def test_validate_written_step_file_js_requires_action_listener_from_button_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            (p / "index.html").write_text(
+                "<!DOCTYPE html><html><body><button id='primary-btn'>Save</button><div id='status'></div></body></html>",
+                encoding="utf-8",
+            )
+            (p / "script.js").write_text(
+                "const status = document.getElementById('status');\n"
+                "function render(){ status.textContent='ok'; }\n",
+                encoding="utf-8",
+            )
+            step_context = {
+                "steps": [
+                    {"num": 1, "filename": "index.html", "status": "done"},
+                    {"num": 2, "filename": "script.js", "status": "in_progress"},
+                ]
+            }
+            ok, reason = self.gui._validate_written_step_file(p, step_context, "script.js")
+            self.assertFalse(ok)
+            self.assertIn("azione", reason.lower())
+
+    def test_build_step_file_rules_generic_html_js(self):
+        html_rules = self.gui._build_step_file_rules("index.html")
+        js_rules = self.gui._build_step_file_rules("script.js")
+        self.assertNotIn("celle gioco", html_rules.lower())
+        self.assertIn("hook stabili", html_rules.lower())
+        self.assertNotIn("bottone reset", js_rules.lower())
+
+    def test_infer_project_name_has_no_tris_special_case(self):
+        inferred = self.gui._infer_project_name("il tris è lento su questo laptop")
+        self.assertEqual(inferred, "Nuovo Progetto")
 
     def test_update_memory_from_file_extracts_html_and_js_refs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -291,6 +423,27 @@ Key references:
         self.assertIn("script.js", prompt)
         self.assertIn("listener reset mancante", prompt)
         self.assertIn("REGOLE FIX AGGIUNTIVE", prompt)
+
+    def test_strip_doc_steps_for_new_mode(self):
+        steps = [
+            {"num": 1, "filename": "index.html", "goal": "html"},
+            {"num": 2, "filename": "styles.css", "goal": "css"},
+            {"num": 3, "filename": "README.md", "goal": "docs"},
+            {"num": 4, "filename": "script.js", "goal": "js"},
+        ]
+        filtered, removed = self.gui._strip_doc_steps_for_new_mode(steps, "crea un gioco del tris")
+        self.assertEqual(removed, ["README.md"])
+        self.assertEqual([s["filename"] for s in filtered], ["index.html", "styles.css", "script.js"])
+        self.assertEqual([s["num"] for s in filtered], [1, 2, 3])
+
+        kept, removed2 = self.gui._strip_doc_steps_for_new_mode(steps, "crea un gioco del tris con readme")
+        self.assertEqual(removed2, [])
+        self.assertEqual(len(kept), 4)
+
+    def test_validate_file_content_css_one_line_is_allowed(self):
+        css = ".board{display:grid;grid-template-columns:repeat(3,1fr);} .cell{width:80px;height:80px;}"
+        result = self.gui._validate_file_content("styles.css", css)
+        self.assertTrue(result["valid"], result["reason"])
 
 
 if __name__ == "__main__":

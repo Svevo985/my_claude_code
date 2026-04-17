@@ -547,8 +547,8 @@ Fix applicate su pipeline step-by-step e GUI:
   - `test_command_parser.py` (nuovi test parser robusto)
   - `test_step_workflow.py` (nuovi test fallback contenuto diretto e casi parsing)
 - Pulizia modelfiles:
-  - mantenuto un solo modelfile operativo: `modelfiles/Modelfile_qwen35_shellbot_create`
-  - ricreato modello Ollama: `qwen3.5-9b-sushi-coder-shellbot-create:latest`
+  - mantenuto un solo modelfile operativo: `modelfiles/Modelfile_qwen25_shellbot_create`
+  - ricreato modello Ollama: `qwen2.5-coder-shellbot-create:latest`
   - aggiornati `config.json` e `.ollama_bridge_state.json` sul nuovo modello.
 
 Esito test reale end-to-end (path richiesto):
@@ -684,10 +684,9 @@ Obiettivo: valutare modelli <=7B (target RAM <=6GB) per task `create` e `fix` su
 
 ### Decisione tecnica consigliata
 
-- Profilo ibrido per hardware modesto:
-  - primo tentativo: `qwen2.5-coder:3b`
-  - fallback automatico su failure validation: `qwen2.5-coder:7b`
-- Mantieni validazioni cross-file severe: qualita recuperata con costo medio inferiore rispetto al solo 7B.
+- Profilo operativo corrente: **`qwen2.5-coder:7b` subito** su `/new` e `/fix`.
+- Mantieni validazioni cross-file severe per difendere la qualita.
+- Opzione futura (non attiva): fallback `3b -> 7b` solo se servira ridurre latenza media.
 
 ### Artefatti benchmark
 
@@ -695,3 +694,115 @@ Obiettivo: valutare modelli <=7B (target RAM <=6GB) per task `create` e `fix` su
 - Run principale: `tmp/bench_small_models/bench_20260417_132825`
 - Retry level-4: `tmp/bench_small_models/level4_retry`
 - Rescore rilassato: `tmp/bench_small_models/rescore_relaxed.py`
+
+## Allineamento Modello Operativo (2026-04-17)
+
+Aggiornamento finale richiesto: pipeline allineata a `qwen2.5-coder:7b`.
+
+- Modelfile attivo:
+  - `modelfiles/Modelfile_qwen25_shellbot_create` (FROM `qwen2.5-coder:7b`)
+- Alias operativo Ollama:
+  - `qwen2.5-coder-shellbot-create:latest`
+- Configurazioni aggiornate:
+  - `config.json` -> modello default `qwen2.5-coder-shellbot-create:latest`
+  - `.ollama_bridge_state.json` -> modello corrente `qwen2.5-coder-shellbot-create:latest`
+- Pulizia runtime:
+  - rimosso alias legacy `qwen3.5-9b-sushi-coder-shellbot-create:latest` per evitare selezione accidentale in GUI.
+
+### Fix mirata qwen2.5-coder:7b (2026-04-17)
+
+Issue riscontrata in run reale: output step spesso nel formato PowerShell malchiuso (`-Value @' ... '` senza terminatore `'@`), con conseguente errore `Comando troncato o stringa -Value non chiusa` su tutti i file.
+
+Fix minima applicata (senza stravolgere pipeline):
+- `src/gui.py`:
+  - parser `-Value` reso tollerante al pattern malformato qwen2.5 (`@'...` con quote finale), con recupero contenuto quando possibile
+  - check troncamento aggiornato: se contenuto recuperabile e valido, non blocca lo step come troncato
+  - hint prompt mirato solo per `qwen2.5-coder`: preferire `-Value '...'` con `\n` invece di here-string
+- Test aggiunti (`test_step_workflow.py`):
+  - estrazione contenuto da here-string malchiuso
+  - comando malchiuso recuperabile non segnalato come troncato
+
+Esito verifica locale:
+- `python -m unittest -q` -> **20/20 OK**
+- smoke test su comando malchiuso qwen2.5 -> file scritto correttamente (**OK**)
+
+### Fix ultima run qwen2.5 (2026-04-17)
+
+Cause del comportamento osservato:
+- `README.md` creato perche il planner aveva inserito uno step esplicito `README.md` (step 4).
+- `styles.css` falliva per validazione troppo rigida (`CSS: tutto su una riga, serve newline`) anche con CSS sintatticamente valido.
+
+Correzioni minime applicate:
+- In modalita `/new`, i file documentali (`README.md` e simili) vengono rimossi dal piano se l''utente non li richiede esplicitamente.
+- Validazione CSS rilassata: non richiede piu newline obbligatori per CSS one-line valido.
+
+Effetto atteso:
+- Nessun `README.md` automatico in creazione progetto standard (a meno di richiesta esplicita).
+- Meno falsi negativi su step CSS con output compatti del modello.
+
+### Generalizzazione bridge (2026-04-17)
+
+Obiettivo: evitare overfitting del bridge sul solo caso "tris" e mantenere regole dinamiche valide per richieste diverse.
+
+Correzioni applicate in `src/gui.py`:
+- Rimossa euristica hardcoded sul nome progetto legata a keyword `tris`.
+- Prompt step resi piu neutrali:
+  - HTML: hook stabili generici (`class`/`data-*`) senza esempi specifici di gioco.
+  - CSS: regola su controlli interattivi generale (button/input/link d'azione), non solo reset button.
+  - JS: regola su handler collegati a controlli reali in HTML, senza riferimento a casi fissi.
+- Prompt planning rinforzato: `acceptance_checks` devono essere verificabili e osservabili (non vaghi).
+- Validazione JS/HTML resa action-aware:
+  - listener obbligatorio solo per bottoni riconosciuti come "controlli d'azione" (id/class/testo/type submit-reset),
+  - niente falso blocco su bottoni non-azione.
+  - supporto anche a handler `onclick=` oltre ad `addEventListener`.
+
+Test aggiornati (`test_step_workflow.py`):
+- caso positivo: bottone non-azione puo esistere senza listener JS dedicato;
+- caso negativo: bottone azione (es. label Save) senza listener viene bloccato;
+- verifica che le regole prompt HTML/JS non contengano riferimenti specifici al tris;
+- verifica assenza special-case `tris` in inferenza nome progetto.
+
+### Fix failure /fix da log (2026-04-17)
+
+Diagnosi da `logs/gui_20260417_161513.log`:
+- Step `styles.css` falliva per mancanza di stile applicabile al controllo azione HTML (`reset-button`).
+- In alcuni output il modello usava `Set-Content -Append` e il fallback locale trattava ancora `Set-Content` come overwrite.
+
+Fix applicate in `src/gui.py`:
+- Esecuzione comandi robusta:
+  - `Set-Content -Append` ora viene interpretato come append reale (modalita `a`) al pari di `Add-Content`.
+- Validazione CSS/HTML raffinata:
+  - il controllo stile bottoni e ora action-aware: richiede selector su controlli d'azione (id/class/text/type) o regola `button` generica;
+  - evita falsi negativi su bottoni non-azione.
+
+Test aggiunti/aggiornati (`test_step_workflow.py`):
+- verifica supporto `Set-Content -Append` nel fallback executor;
+- verifica che CSS senza stile bottone passi quando il bottone non e un controllo d'azione;
+- verifica che mismatch su bottone azione continui a essere bloccato.
+
+Esito test:
+- `python -m unittest -q` -> **28/28 OK**
+
+### Fix runtime non-funziona (2026-04-17)
+
+Problema osservato in run reale: UI caricata ma interazione non funzionante.
+
+Root cause individuata:
+- `script.js` generato con over-escaping LLM delle parentesi quadre (`\\[` / `\\]`) nei blocchi array/accesso indice.
+- Il browser vede JS non valido e blocca i listener click.
+
+Fix applicata in `src/gui.py`:
+- nuova normalizzazione ` _repair_probable_overescaped_content(...)`:
+  - attiva su file testuali/codice;
+  - de-escape di `\\[` e `\\]` solo quando il pattern e sistematico (>=3 coppie e nessuna parentesi non-escapeata), per evitare modifiche aggressive.
+- la normalizzazione viene applicata:
+  - su contenuto diretto fallback (`_write_direct_step_content`);
+  - su contenuto estratto da `Set-Content/Add-Content`;
+  - su percorso heredoc.
+
+Test aggiunti:
+- `test_execute_command_with_fallback_repairs_overescaped_js_brackets`
+- `test_repair_overescaped_content_does_not_touch_small_regex_like_escape`
+
+Esito test:
+- `python -m unittest -q` -> **30/30 OK**

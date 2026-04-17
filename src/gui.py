@@ -1782,8 +1782,6 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
             name = m.group(1).strip(" .:-")
             if name:
                 return name
-        if "tris" in user_message.lower():
-            return "Gioco del Tris"
         return "Nuovo Progetto"
 
     def _list_project_code_files(self, project_path: Path, max_files: int = 80) -> list[str]:
@@ -1898,9 +1896,52 @@ REGOLE:
 - {step_rule}
 - filename deve avere estensione.
 - acceptance_checks deve contenere da 2 a 4 check concreti.
+- acceptance_checks deve descrivere verifiche osservabili (coerenza file o comportamento utente), non frasi vaghe.
 - num deve essere progressivo (1..N).{fix_rules}
 {extra_context}
 Richiesta utente: {user_message}"""
+
+    def _user_explicitly_requests_docs(self, user_message: str) -> bool:
+        text = (user_message or "").lower()
+        keywords = [
+            "readme",
+            "documentazione",
+            "documentation",
+            "docs",
+            "manuale",
+            "guida",
+        ]
+        return any(k in text for k in keywords)
+
+    def _strip_doc_steps_for_new_mode(self, steps: list[dict], user_message: str) -> tuple[list[dict], list[str]]:
+        """
+        In /new evita file documentali non richiesti esplicitamente (es. README.md).
+        Mantiene intatta la pipeline ma previene artefatti non desiderati.
+        """
+        if self._user_explicitly_requests_docs(user_message):
+            return steps, []
+
+        doc_like = {
+            "readme.md",
+            "documentation.md",
+            "documentazione.md",
+            "docs.md",
+            "manuale.md",
+            "guida.md",
+        }
+        removed: list[str] = []
+        filtered: list[dict] = []
+        for step in steps:
+            filename = Path(str(step.get("filename", ""))).name.lower()
+            if filename in doc_like:
+                removed.append(Path(str(step.get("filename", ""))).name)
+                continue
+            filtered.append(step)
+
+        for idx, step in enumerate(filtered, 1):
+            step["num"] = idx
+
+        return filtered, removed
 
     def _sanitize_llm_response(self, text: str) -> str:
         clean = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL | re.IGNORECASE)
@@ -2305,37 +2346,59 @@ Richiesta utente: {user_message}"""
 
     def _build_step_file_rules(self, filename: str) -> str:
         ext = Path(filename).suffix.lower().lstrip(".")
+        model_name = (getattr(self, "ollama", None).model or "").lower() if getattr(self, "ollama", None) else ""
+        prefer_plain_value = "qwen2.5-coder" in model_name
         if ext == "html":
-            return """REGOLE FILE HTML:
+            base = """REGOLE FILE HTML:
 - Scrivi HTML completo e valido.
 - Non usare placeholder o testo descrittivo al posto del codice.
-- Se il piano richiede file esterni, includi i riferimenti necessari."""
+- Se il piano richiede file esterni, includi i riferimenti necessari.
+- Per elementi interattivi ripetuti usa hook stabili per JS (classi coerenti e, quando utile, attributi `data-*`)."""
+            if prefer_plain_value:
+                base += "\n- Per questo modello evita here-string PowerShell: usa `-Value '...'` con `\\n`."
+            return base
         if ext == "css":
-            return """REGOLE FILE CSS:
+            base = """REGOLE FILE CSS:
 - Solo CSS, nessun HTML o JS.
 - Nessun placeholder.
 - Mantieni coerenza con ID/classi dichiarate nei riferimenti chiave.
-- Se in HTML ci sono bottoni (es. reset), definisci selettori che li stilizzano davvero (#id, .classe o button)."""
+- Se in HTML ci sono controlli interattivi (button/input/link d'azione), includi selettori che li stilizzano davvero (#id, .classe o tag coerente)."""
+            if prefer_plain_value:
+                base += "\n- Per questo modello evita here-string PowerShell: usa `-Value '...'` con `\\n`."
+            return base
         if ext in {"js", "ts"}:
-            return """REGOLE FILE JS/TS:
+            base = """REGOLE FILE JS/TS:
 - Solo codice JS/TS, nessun markdown.
 - Funzioni complete, nessun placeholder.
 - Mantieni coerenza con i riferimenti chiave.
 - Non usare commenti HTML (`<!-- -->`) in file JS/TS.
-- Se esistono controlli UI in HTML (es. bottone reset), collega esplicitamente `addEventListener`.
+- Se esistono controlli UI in HTML, collega gli handler agli elementi realmente presenti.
 - Se usi `getElementById/querySelector`, i selettori devono esistere in HTML.
 - Per contenuti multilinea preferisci here-string PowerShell (`-Value @' ... '@`)."""
+            if prefer_plain_value:
+                base += "\n- Per questo modello evita here-string PowerShell: usa `-Value '...'` con `\\n`."
+            return base
         if ext == "py":
-            return """REGOLE FILE PY:
+            base = """REGOLE FILE PY:
 - Solo codice Python valido.
 - Nessun placeholder.
 - Mantieni il file autosufficiente per il suo scopo."""
+            if prefer_plain_value:
+                base += "\n- Per questo modello evita here-string PowerShell: usa `-Value '...'` con `\\n`."
+            return base
         return """REGOLE FILE:
 - Scrivi solo il contenuto completo del file richiesto.
 - Nessun placeholder, nessuna spiegazione."""
 
     def _build_step_user_prompt(self, step: dict, total_steps: int, brief: str, file_rules: str) -> str:
         filename = step["filename"]
+        model_name = (getattr(self, "ollama", None).model or "").lower() if getattr(self, "ollama", None) else ""
+        multiline_rule = f"- Se il file e' multilinea, preferisci `Set-Content -Path '{filename}' -Value @' ... '@`."
+        if "qwen2.5-coder" in model_name:
+            multiline_rule = (
+                f"- Se il file e' multilinea, usa `Set-Content -Path '{filename}' -Value 'riga1\\nriga2...'` "
+                "(NO here-string `@' ... '@`)."
+            )
         return f"""{brief}
 
 {file_rules}
@@ -2346,7 +2409,7 @@ VINCOLI DI OUTPUT:
 - Nessun testo extra fuori dal JSON.
 - Usa comandi compatibili con PowerShell.
 - Obbligatorio usare chiavi cmd1/cmd2/cmd3...
-- Se il file e' multilinea, preferisci `Set-Content -Path '{filename}' -Value @' ... '@`.
+{multiline_rule}
 - Vietato usare placeholder (es. CONTENUTO_COMPLETO).
 
 Siamo allo step {step['num']}/{total_steps}."""
@@ -2461,6 +2524,7 @@ Siamo allo step {step['num']}/{total_steps}."""
         return None
 
     def _write_direct_step_content(self, p_path: Path, filename: str, content: str) -> bool:
+        content = self._repair_probable_overescaped_content(filename, content)
         validation = self._validate_file_content(filename, content)
         if not validation['valid']:
             logger.warning(f"Contenuto diretto scartato per {filename}: {validation['reason']}")
@@ -2497,21 +2561,100 @@ Siamo allo step {step['num']}/{total_steps}."""
                 if token:
                     classes.add(token)
 
-        button_ids = set(
-            re.findall(r'<button[^>]*\bid=["\']([^"\']+)["\']', html_content, re.IGNORECASE)
-        )
+        button_ids = set(re.findall(r'<button[^>]*\bid=["\']([^"\']+)["\']', html_content, re.IGNORECASE))
         button_classes: set[str] = set()
         for match in re.finditer(r'<button[^>]*\bclass=["\']([^"\']+)["\']', html_content, re.IGNORECASE):
             for token in re.split(r"\s+", match.group(1).strip()):
                 if token:
                     button_classes.add(token)
 
+        button_text_by_id: dict[str, str] = {}
+        button_types_by_id: dict[str, str] = {}
+        button_classes_by_id: dict[str, set[str]] = {}
+        for match in re.finditer(r"<button\b([^>]*)>(.*?)</button>", html_content, re.IGNORECASE | re.DOTALL):
+            attrs = match.group(1) or ""
+            body = match.group(2) or ""
+
+            id_match = re.search(r'\bid=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+            if not id_match:
+                continue
+            button_id = id_match.group(1)
+            button_ids.add(button_id)
+
+            class_match = re.search(r'\bclass=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+            cls_tokens: set[str] = set()
+            if class_match:
+                for token in re.split(r"\s+", class_match.group(1).strip()):
+                    if token:
+                        cls_tokens.add(token)
+                        button_classes.add(token)
+                if cls_tokens:
+                    button_classes_by_id[button_id] = cls_tokens
+
+            type_match = re.search(r'\btype=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+            if type_match:
+                button_types_by_id[button_id] = type_match.group(1).strip().lower()
+
+            plain_text = re.sub(r"<[^>]+>", " ", body)
+            plain_text = re.sub(r"\s+", " ", plain_text).strip().lower()
+            if plain_text:
+                button_text_by_id[button_id] = plain_text
+
         return {
             "ids": ids,
             "classes": classes,
             "button_ids": button_ids,
             "button_classes": button_classes,
+            "button_text_by_id": button_text_by_id,
+            "button_types_by_id": button_types_by_id,
+            "button_classes_by_id": button_classes_by_id,
         }
+
+    def _looks_like_action_control(self, text: str) -> bool:
+        normalized = (text or "").strip().lower()
+        if not normalized:
+            return False
+        action_patterns = (
+            r"\breset\b", r"\brestart\b", r"\breload\b", r"\brefresh\b",
+            r"\bsave\b", r"\bsubmit\b", r"\bsend\b", r"\bsearch\b",
+            r"\bstart\b", r"\bstop\b", r"\bplay\b", r"\bretry\b",
+            r"\bnew[\s_-]?game\b", r"\bcontinue\b", r"\bconfirm\b", r"\bcancel\b",
+            r"\bopen\b", r"\bclose\b", r"\bdownload\b", r"\bupload\b",
+            r"\bdelete\b", r"\bremove\b", r"\bcreate\b", r"\bupdate\b", r"\bapply\b",
+            r"\bavvia\b", r"\bferma\b", r"\bricomincia\b", r"\bsalva\b", r"\binvia\b",
+            r"\bcerca\b", r"\bannulla\b", r"\bconferma\b", r"\bapri\b", r"\bchiudi\b",
+            r"\belimina\b", r"\brimuovi\b", r"\bcrea\b", r"\baggiorna\b", r"\besegui\b",
+            r"\bscarica\b", r"\bcarica\b",
+        )
+        return any(re.search(pattern, normalized) for pattern in action_patterns)
+
+    def _collect_action_button_ids(self, html_contract: dict) -> set[str]:
+        button_ids: set[str] = set(html_contract.get("button_ids", set()))
+        text_by_id: dict[str, str] = html_contract.get("button_text_by_id", {}) or {}
+        types_by_id: dict[str, str] = html_contract.get("button_types_by_id", {}) or {}
+        classes_by_id: dict[str, set[str]] = html_contract.get("button_classes_by_id", {}) or {}
+
+        action_ids: set[str] = set()
+        for button_id in button_ids:
+            if self._looks_like_action_control(button_id):
+                action_ids.add(button_id)
+                continue
+
+            button_type = (types_by_id.get(button_id, "") or "").lower()
+            if button_type in {"submit", "reset"}:
+                action_ids.add(button_id)
+                continue
+
+            class_tokens = classes_by_id.get(button_id, set()) or set()
+            if any(self._looks_like_action_control(token) for token in class_tokens):
+                action_ids.add(button_id)
+                continue
+
+            label = text_by_id.get(button_id, "")
+            if self._looks_like_action_control(label):
+                action_ids.add(button_id)
+
+        return action_ids
 
     def _html_button_has_inline_handler(self, html_content: str, button_id: str) -> bool:
         return bool(
@@ -2543,18 +2686,25 @@ Siamo allo step {step['num']}/{total_steps}."""
         if dom_selector_hits == 0:
             return False, "CSS non usa selector coerenti con id/class presenti in HTML"
 
-        # I bottoni HTML devono avere stile specifico o almeno regole generiche su `button`.
+        # Se in HTML esistono controlli d'azione, il CSS deve includere stile specifico
+        # per almeno uno di essi o uno stile generico su `button`.
         has_generic_button_style = bool(re.search(r"(?<![A-Za-z0-9_-])button(?![A-Za-z0-9_-])", css_content))
+        action_button_ids = self._collect_action_button_ids(html)
+        action_button_classes: set[str] = set()
+        classes_by_id = html.get("button_classes_by_id", {}) or {}
+        for btn_id in action_button_ids:
+            action_button_classes.update(classes_by_id.get(btn_id, set()) or set())
+
         button_specific_hits = 0
-        for el_id in button_ids:
+        for el_id in action_button_ids:
             if f"#{el_id}" in css_content:
                 button_specific_hits += 1
-        for cls in button_classes:
+        for cls in action_button_classes:
             if f".{cls}" in css_content:
                 button_specific_hits += 1
 
-        if (button_ids or button_classes) and button_specific_hits == 0 and not has_generic_button_style:
-            return False, "CSS non contiene stili applicabili ai bottoni presenti in HTML"
+        if action_button_ids and button_specific_hits == 0 and not has_generic_button_style:
+            return False, "CSS non contiene stili applicabili ai controlli d'azione presenti in HTML"
 
         return True, "OK"
 
@@ -2589,13 +2739,25 @@ Siamo allo step {step['num']}/{total_steps}."""
         ):
             return True
         if re.search(
+            rf"document\.getElementById\(\s*['\"]{re.escape(element_id)}['\"]\s*\)\s*\.onclick\s*=",
+            js_content,
+        ):
+            return True
+        if re.search(
             rf"document\.querySelector\(\s*['\"]#{re.escape(element_id)}['\"]\s*\)\s*\.addEventListener\(",
+            js_content,
+        ):
+            return True
+        if re.search(
+            rf"document\.querySelector\(\s*['\"]#{re.escape(element_id)}['\"]\s*\)\s*\.onclick\s*=",
             js_content,
         ):
             return True
 
         for var_name in id_to_vars.get(element_id, set()):
             if re.search(rf"\b{re.escape(var_name)}\b\s*(?:\?\.)?\.addEventListener\(", js_content):
+                return True
+            if re.search(rf"\b{re.escape(var_name)}\b\s*(?:\?\.)?\.onclick\s*=", js_content):
                 return True
         return False
 
@@ -2621,25 +2783,14 @@ Siamo allo step {step['num']}/{total_steps}."""
                 if element_id not in html_ids:
                     return False, f"JS usa id non presente in HTML: #{element_id}"
 
-        # Se esistono bottoni con id, devono avere almeno un listener JS o un handler inline.
+        # Richiede listener solo per controlli d'azione riconoscibili (id/class/text/type).
         if button_ids:
-            listener_count = 0
-            for btn_id in button_ids:
-                if self._js_has_listener_for_id(js_content, btn_id, id_to_vars):
-                    listener_count += 1
-
-            if listener_count == 0:
-                missing = ", ".join(sorted(button_ids)[:4])
-                return False, f"JS non collega event listener ai bottoni HTML (id: {missing})"
-
-            critical_keywords = ("reset", "restart", "submit", "save", "send", "start", "stop")
-            for btn_id in button_ids:
-                if not any(k in btn_id.lower() for k in critical_keywords):
-                    continue
+            action_button_ids = self._collect_action_button_ids(html)
+            for btn_id in sorted(action_button_ids):
                 has_listener = self._js_has_listener_for_id(js_content, btn_id, id_to_vars)
                 has_inline = self._html_button_has_inline_handler(html_content, btn_id)
                 if not has_listener and not has_inline:
-                    return False, f"JS non gestisce il bottone critico `{btn_id}` (listener mancante)"
+                    return False, f"JS non gestisce il controllo d'azione `{btn_id}` (listener mancante)"
 
         return True, "OK"
 
@@ -2825,6 +2976,14 @@ Siamo allo step {step['num']}/{total_steps}."""
 
             app_summary = plan_data.get("app_summary", [])
             steps = plan_data.get("steps", [])
+
+            if mode == "new":
+                steps, removed_doc_steps = self._strip_doc_steps_for_new_mode(steps, user_message)
+                if removed_doc_steps:
+                    plan_data["steps"] = steps
+                    removed_str = ", ".join(removed_doc_steps)
+                    logger.info(f"Step documentazione rimossi in /new (non richiesti): {removed_str}")
+                    self.root.after(0, lambda r=removed_str: self._add_message(f"[INFO] Step documentazione rimossi: {r}", "info"))
 
             if not steps:
                 logger.error("Nessuno step valido nel piano JSON")
@@ -3056,6 +3215,7 @@ Siamo allo step {step['num']}/{total_steps}."""
                 if content is None:
                     logger.error(f" Impossibile estrarre -Value dal comando")
                     return False
+                content = self._repair_probable_overescaped_content(filename, content)
                 
                 # === VALIDAZIONE CRITICA ===
                 validation = self._validate_file_content(filename, content)
@@ -3066,7 +3226,10 @@ Siamo allo step {step['num']}/{total_steps}."""
                 
                 t_file = p_path / expected_name
                 t_file.parent.mkdir(parents=True, exist_ok=True)
-                mode = 'a' if cmd_str.startswith("Add-Content") else 'w'
+                is_append = cmd_str.startswith("Add-Content") or bool(
+                    re.search(r"(^|\s)-Append(?:\s|$)", cmd_str, re.IGNORECASE)
+                )
+                mode = 'a' if is_append else 'w'
                 with open(t_file, mode, encoding='utf-8') as f:
                     f.write(content)
                 logger.info(f" File creato: {t_file.name} ({len(content)} bytes)")
@@ -3105,6 +3268,7 @@ Siamo allo step {step['num']}/{total_steps}."""
                 # Converti \\n letterali in newline reali
                 content = content.replace('\\n', '\n')
                 content = content.replace('\\t', '\t')
+                content = self._repair_probable_overescaped_content(filename, content)
 
                 if content.strip():
                     validation = self._validate_file_content(filename, content)
@@ -3153,9 +3317,20 @@ Siamo allo step {step['num']}/{total_steps}."""
                 content_start += 1
 
             end_pos = cmd_str.find(closer, content_start)
-            if end_pos == -1:
-                return None
-            return self._decode_command_value(cmd_str[content_start:end_pos], None)
+            if end_pos >= 0:
+                return self._decode_command_value(cmd_str[content_start:end_pos], None)
+
+            # Fallback tollerante per output qwen2.5: "-Value @'...'" (manca terminatore "'@")
+            tail = cmd_str[content_start:].strip()
+            if tail.endswith("'"):
+                candidate = tail[:-1]
+                if candidate.strip():
+                    return self._decode_command_value(candidate, None)
+            if tail.endswith('"'):
+                candidate = tail[:-1]
+                if candidate.strip():
+                    return self._decode_command_value(candidate, None)
+            return None
 
         quote_char = cmd_str[value_start_pos]
         if quote_char not in ("'", '"'):
@@ -3223,6 +3398,30 @@ Siamo allo step {step['num']}/{total_steps}."""
         value = value.replace('\\"', '"').replace("\\'", "'")
         return value
 
+    def _repair_probable_overescaped_content(self, filename: str, content: str) -> str:
+        """
+        Ripara over-escaping tipico LLM (es. `\\[` e `\\]` in codice) quando il pattern e' sistematico.
+        Evita modifiche aggressive: de-escape solo se non esistono parentesi quadre non escapeate.
+        """
+        ext = Path(filename).suffix.lower()
+        if ext not in {".js", ".ts", ".css", ".html", ".py", ".java", ".json", ".xml", ".sql", ".md", ".txt"}:
+            return content
+
+        repaired = content
+        escaped_open = repaired.count("\\[")
+        escaped_close = repaired.count("\\]")
+        if escaped_open >= 3 and escaped_close >= 3:
+            unescaped_open = len(re.findall(r"(?<!\\)\[", repaired))
+            unescaped_close = len(re.findall(r"(?<!\\)\]", repaired))
+            if unescaped_open == 0 and unescaped_close == 0:
+                repaired = repaired.replace("\\[", "[").replace("\\]", "]")
+                logger.warning(
+                    f"Riparazione auto over-escape applicata su {filename}: "
+                    f"de-escape [] ({escaped_open}/{escaped_close})"
+                )
+
+        return repaired
+
     def _is_command_likely_truncated(self, cmd: str) -> bool:
         """Rileva comandi probabilmente troncati prima della chiusura del contenuto."""
         cmd_str = (cmd or "").strip()
@@ -3233,11 +3432,15 @@ Siamo allo step {step['num']}/{total_steps}."""
 
         here_single = cmd_str.find("-Value @'")
         if here_single >= 0 and cmd_str.find("'@", here_single + 8) == -1:
-            return True
+            recovered = self._extract_value_from_command(cmd_str)
+            if not recovered or len(recovered.strip()) < 5:
+                return True
 
         here_double = cmd_str.find('-Value @"')
         if here_double >= 0 and cmd_str.find('"@', here_double + 8) == -1:
-            return True
+            recovered = self._extract_value_from_command(cmd_str)
+            if not recovered or len(recovered.strip()) < 5:
+                return True
 
         if re.search(r"-Value\s+'", cmd_str):
             if not re.search(r"-Value\s+'(?:.|\n)*'(?:\s+-[A-Za-z][\w-]*(?:\s+[^-].*)?)?\s*$", cmd_str):
@@ -3271,8 +3474,6 @@ Siamo allo step {step['num']}/{total_steps}."""
         elif ext == 'css':
             if '{' not in content or '}' not in content:
                 return {'valid': False, 'reason': 'CSS: mancano parentesi graffe'}
-            if '\n' not in content and len(stripped) > 200:
-                return {'valid': False, 'reason': 'CSS: tutto su una riga, serve newline'}
 
         elif ext in {'js', 'ts'}:
             if stripped.startswith('.'):
