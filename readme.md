@@ -527,3 +527,171 @@ Esito ultimo run:
 Modello sperimentale creato per forcing JSON:
 - `qwen3.5-9b-sushi-coder-claude-jsonbridge:latest`
 - Modelfile: `modelfiles/Modelfile_qwen35_json_bridge_claude_mf`
+
+## Aggiornamento Operativo (2026-04-16)
+
+Fix applicate su pipeline step-by-step e GUI:
+
+- Corretto parser comandi (`src/command_parser.py`) per estrarre in modo robusto:
+  - comandi `Set-Content/Add-Content` con here-string PowerShell `@' ... '@`
+  - risposte JSON malformate con doppi apici non escapeati nel contenuto file
+  - preferenza automatica per il comando manuale piu completo quando il parse JSON produce comando troncato
+- Aggiunto fallback nel workflow (`src/gui.py`):
+  - se il modello risponde con `cmd1` contenente direttamente il contenuto file (non comando), il bridge salva comunque il file target dopo validazione
+- Migliorata robustezza step execution:
+  - detection comando troncato mantenuta
+  - `num_predict` aumentato per step file lunghi (`html/css/js/ts`)
+  - opzione Ollama `think=false` e prompt con divieto esplicito di `<think>`
+- Normalizzata GUI in ASCII (`src/gui.py`) per eliminare completamente il mojibake in Windows.
+- Aggiunti test:
+  - `test_command_parser.py` (nuovi test parser robusto)
+  - `test_step_workflow.py` (nuovi test fallback contenuto diretto e casi parsing)
+- Pulizia modelfiles:
+  - mantenuto un solo modelfile operativo: `modelfiles/Modelfile_qwen35_shellbot_create`
+  - ricreato modello Ollama: `qwen3.5-9b-sushi-coder-shellbot-create:latest`
+  - aggiornati `config.json` e `.ollama_bridge_state.json` sul nuovo modello.
+
+Esito test reale end-to-end (path richiesto):
+`C:\Users\VittorioVizzaccaro\OneDrive - softstrategyspa\Documenti\progetti\miei\test tris`
+
+- Run completo workflow deterministico: **OK**
+  - STEP 1 `index.html` creato
+  - STEP 2 `style.css` creato
+  - STEP 3 `script.js` creato
+  - stato finale: `[OK] PROGETTO COMPLETATO`
+- Verifiche finali progetto generato: **OK**
+  - `index.html` collega `style.css` e `script.js`
+  - presenti 9 celle board
+  - logica JS con turni, win/draw e reset
+- Hardening aggiuntivo post-run su file generato:
+  - fix null-check click cella in `script.js`
+  - fix highlight celle vincenti (solo combinazione realmente vincente)
+
+Stato attuale (cosa va / cosa non va):
+- Va:
+  - pipeline plan + step JSON con fallback robusti
+  - creazione progetto tris funzionante nel path target
+  - GUI senza caratteri corrotti (ASCII-safe)
+- Limiti noti:
+  - modello ancora non perfettamente deterministico (a volte output verbose o JSON malformato)
+  - tempo run elevato (inferenza locale lenta su workflow multi-step)
+
+### Verifica finale sessione (2026-04-16)
+
+- Conferma test automatici: `python -m unittest -q` -> **14/14 OK**.
+- Conferma artefatti nel path richiesto:
+  - `C:\Users\VittorioVizzaccaro\OneDrive - softstrategyspa\Documenti\progetti\miei\test tris\index.html`
+  - `C:\Users\VittorioVizzaccaro\OneDrive - softstrategyspa\Documenti\progetti\miei\test tris\style.css`
+  - `C:\Users\VittorioVizzaccaro\OneDrive - softstrategyspa\Documenti\progetti\miei\test tris\script.js`
+- Check statici minimi progetto tris: link HTML/CSS/JS presenti, board 3x3, logica win/draw/reset presente.
+- Runtime Ollama fermato a fine lavorazione (`ollama ps` senza modelli in esecuzione).
+
+## Aggiornamento Operativo (2026-04-17)
+
+Ottimizzazioni applicate su robustezza one-shot e modalita `/fix`.
+
+### Miglioramenti bridge (one-shot)
+
+- Corrette regex di estrazione riferimenti in `src/gui.py` che degradavano il contesto step:
+  - link HTML CSS/JS (`\.css` / `\.js`) -> fix su pattern corretti
+  - parsing JS `getElementById(...)` / `querySelector(...)` -> fix su pattern corretti
+- Migliorata estrazione memoria progetto:
+  - classi HTML ora splittate correttamente (`class="a b"` -> `a`, `b`)
+  - aggiunto tracking `button_ids` in key references
+- Potenziate regole prompt per step `CSS` e `JS/TS`:
+  - CSS: obbligo coerenza reale con ID/class HTML e stile controlli UI (es. reset)
+  - JS: obbligo listener espliciti (`addEventListener`) su controlli UI e selettori coerenti con HTML
+- Potenziata validazione cross-file post-scrittura (`_validate_written_step_file`):
+  - HTML: verifica link ai file CSS/JS previsti
+  - CSS: verifica matching con DOM HTML + stile bottoni
+  - JS/TS: verifica ID/class referenziati, listener bottoni, check su bottoni critici (`reset/restart/...`)
+  - PY: check sintassi tramite `compile(...)`
+  - JAVA: check light (classe presente + graffe bilanciate)
+
+### Miglioramenti modalita `/fix`
+
+- `/fix` ora instrada al workflow deterministico step-by-step (non piu solo chat generica).
+- Se manca path nel messaggio, usa automaticamente la working directory corrente della GUI.
+- Aggiunta diagnostica locale pre-fix:
+  - scansione file progetto
+  - rilevazione incoerenze strutturali
+  - iniezione diagnostica nel prompt di planning fix
+- Planning in modalita fix ora include:
+  - elenco file esistenti modificabili
+  - problemi rilevati localmente
+  - regole esplicite: priorita ai fix, modifica file esistenti, coerenza HTML/CSS/JS
+
+### Test aggiornati
+
+- `python -m unittest -q` -> **18/18 OK**.
+- Nuovi test in `test_step_workflow.py`:
+  - mismatch selettori CSS/HTML su bottone reset
+  - listener JS reset mancante
+  - estrazione corretta riferimenti HTML/JS in memoria
+  - planning prompt fix con file esistenti + diagnostica
+
+### Nota run tris (path utente)
+
+Path: `C:\Users\VittorioVizzaccaro\OneDrive - softstrategyspa\Documenti\progetti\miei\test tris`
+
+Fix applicati anche ai file generati correnti per validazione rapida UX:
+- `style.css`: tema piu colorato + selector bottone corretto `#reset-btn`
+- `script.js`: bind `resetBtn.addEventListener('click', resetGame)` + reset status coerente
+
+## Benchmark Modelli Piccoli Coding (2026-04-17)
+
+Obiettivo: valutare modelli <=7B (target RAM <=6GB) per task `create` e `fix` su gioco del tris in condizioni edge/laptop.
+
+### Modelli scaricati
+
+- `qwen2.5-coder:3b` (1.9GB)
+- `qwen2.5-coder:7b` (4.7GB)
+- `starcoder2:7b` (4.0GB)
+- `codegemma:7b` (5.0GB)
+
+### Setup benchmark
+
+- Due task:
+  - `create`: genera `index.html`, `style.css`, `script.js` da richiesta funzionale
+  - `fix`: corregge progetto tris volutamente buggato
+- Prompt progressivo in 3 livelli (generico -> medio -> piu vincolato), poi retry level-4 sui modelli falliti.
+- Parsing output con fallback (`files[]`, mapping filename->content, `cmdN` con `Set-Content`).
+- Validazione funzionale (link HTML/CSS/JS, turni, win/draw/reset, winning-cell green + animazione, coerenza selector reset).
+
+### Risultati sintetici
+
+- **Migliore qualita complessiva**: `qwen2.5-coder:7b`
+  - con prompt level-3 passa `create` e `fix` (validazione funzionale realistica)
+  - contro: lento su CPU edge
+- `qwen2.5-coder:3b`
+  - molto piu veloce
+  - vicino al pass su `fix` (level-4), ma meno affidabile su `create`
+- `starcoder2:7b` e `codegemma:7b`
+  - nel setup testato non raggiungono affidabilita sufficiente per `create+fix` one-shot.
+
+### Tempi osservati (run principale)
+
+- `qwen2.5-coder:3b`:
+  - create: ~291s, fix: ~441s, totale ~732s
+  - throughput medio: ~15 tok/s (create), ~13 tok/s (fix)
+- `qwen2.5-coder:7b`:
+  - create: ~495s, fix: ~1061s, totale ~1555s
+  - throughput medio: ~6.3 tok/s (create), ~5.6 tok/s (fix)
+- `starcoder2:7b`:
+  - totale ~1913s
+- `codegemma:7b`:
+  - totale ~647s ma con output spesso non valido nel formato richiesto
+
+### Decisione tecnica consigliata
+
+- Profilo ibrido per hardware modesto:
+  - primo tentativo: `qwen2.5-coder:3b`
+  - fallback automatico su failure validation: `qwen2.5-coder:7b`
+- Mantieni validazioni cross-file severe: qualita recuperata con costo medio inferiore rispetto al solo 7B.
+
+### Artefatti benchmark
+
+- Script: `tmp/bench_small_models/benchmark_small_models.py`
+- Run principale: `tmp/bench_small_models/bench_20260417_132825`
+- Retry level-4: `tmp/bench_small_models/level4_retry`
+- Rescore rilassato: `tmp/bench_small_models/rescore_relaxed.py`

@@ -484,6 +484,17 @@ class CommandParser:
         if len(manual_commands) > len(parsed.commands):
             return ParsedCommand(manual_commands, raw_response, True)
 
+        if len(manual_commands) == len(parsed.commands):
+            parsed_len = sum(len(c or "") for c in parsed.commands)
+            manual_len = sum(len(c or "") for c in manual_commands)
+            parsed_has_closed_herestring = any("@'" in c and "'@" in c or '@"' in c and '"@' in c for c in parsed.commands)
+            manual_has_closed_herestring = any("@'" in c and "'@" in c or '@"' in c and '"@' in c for c in manual_commands)
+
+            if manual_len > parsed_len + 30:
+                return ParsedCommand(manual_commands, raw_response, True)
+            if manual_has_closed_herestring and not parsed_has_closed_herestring:
+                return ParsedCommand(manual_commands, raw_response, True)
+
         return parsed
 
     def _try_parse_json(self, json_str: str, raw_response: str) -> ParsedCommand:
@@ -655,14 +666,77 @@ class CommandParser:
         # Rimuovi spazi extra a inizio/fine
         cmd = cmd.strip()
 
-        # Heuristic: chiudi quote sbilanciate (frequente con output LLM troncati)
-        if cmd.count("'") % 2 != 0:
-            cmd += "'"
-        elif cmd.count('"') % 2 != 0:
-            cmd += '"'
-
-
         return cmd
+
+    def _extract_powershell_write_commands(self, text: str) -> List[str]:
+        """
+        Estrae comandi Set-Content/Add-Content in modo robusto anche da JSON malformato.
+        Supporta sia -Value @' ... '@ / @" ... "@ sia -Value '...'/\"...\".
+        """
+        commands: List[str] = []
+        if not text:
+            return commands
+
+        cmd_start = re.compile(r"(?:Set-Content|Add-Content)\s+-Path\s+['\"][^'\"]+['\"]\s+-Value\b", re.IGNORECASE)
+        quote_starts = {"'": "'", '"': '"'}
+
+        search_pos = 0
+        while True:
+            m = cmd_start.search(text, search_pos)
+            if not m:
+                break
+            start = m.start()
+            pos = m.end()
+
+            while pos < len(text) and text[pos] in " \t":
+                pos += 1
+
+            # here-string PowerShell
+            if text.startswith("@'", pos) or text.startswith('@"', pos):
+                opener = text[pos + 1]
+                closer = "'@" if opener == "'" else '"@'
+                body_start = pos + 2
+                end_pos = text.find(closer, body_start)
+                if end_pos != -1:
+                    commands.append(text[start:end_pos + len(closer)].strip())
+                    search_pos = end_pos + len(closer)
+                    continue
+                # comando troncato: append del resto e termina
+                commands.append(text[start:].strip())
+                break
+
+            # valore quoted classico
+            if pos < len(text) and text[pos] in quote_starts:
+                q = text[pos]
+                i = pos + 1
+                while i < len(text):
+                    ch = text[i]
+                    if ch == "\\" and i + 1 < len(text):
+                        i += 2
+                        continue
+                    if ch == q:
+                        # apice PowerShell escaped come '' -> continua
+                        if q == "'" and i + 1 < len(text) and text[i + 1] == "'":
+                            i += 2
+                            continue
+                        commands.append(text[start:i + 1].strip())
+                        search_pos = i + 1
+                        break
+                    i += 1
+                else:
+                    commands.append(text[start:].strip())
+                    break
+                continue
+
+            # se non riconosciamo il formato, prova a tagliare fino a fine riga
+            line_end = text.find("\n", pos)
+            if line_end == -1:
+                commands.append(text[start:].strip())
+                break
+            commands.append(text[start:line_end].strip())
+            search_pos = line_end + 1
+
+        return commands
     
     def _fix_json_escapes(self, json_str: str) -> str:
         """
@@ -795,6 +869,11 @@ class CommandParser:
 
         # ✅ FIX: Rimuovi due punti duplicati
         normalized = re.sub(r':\s*:\s*', ':', normalized)
+
+        # Priorita': estrazione diretta comandi PowerShell scrittura file.
+        direct_ps_commands = self._extract_powershell_write_commands(normalized)
+        if direct_ps_commands:
+            return direct_ps_commands
 
         # Prima estrai il code block JSON se presente
         block_match = re.search(

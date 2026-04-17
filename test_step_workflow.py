@@ -1,11 +1,16 @@
 import unittest
+from pathlib import Path
+import tempfile
 
 from src.gui import OllamaBridgeGUI
+from src.command_parser import CommandParser
+from src.project_memory import ProjectMemory
 
 
 class StepWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.gui = OllamaBridgeGUI.__new__(OllamaBridgeGUI)
+        self.gui.parser = CommandParser()
         self.gui.config = {
             "workflow": {
                 "step_num_predict": 1200,
@@ -117,6 +122,175 @@ Key references:
         hint = self.gui._build_step_retry_hint("script.js", "JSON non valido")
         self.assertIn("script.js", hint)
         self.assertIn("JSON", hint)
+
+    def test_extract_value_handles_unescaped_js_single_quotes(self):
+        cmd = (
+            "Set-Content -Path 'script.js' -Value 'const player = 'X';\\n"
+            "function initGame(){ return player; }'"
+        )
+        content = self.gui._extract_value_from_command(cmd)
+        self.assertIsNotNone(content)
+        self.assertIn("const player = 'X';", content)
+        self.assertIn("function initGame()", content)
+
+    def test_extract_value_supports_powershell_herestring(self):
+        cmd = (
+            "Set-Content -Path 'script.js' -Value @'\n"
+            "const player = 'X';\n"
+            "function initGame(){ return player; }\n"
+            "'@"
+        )
+        content = self.gui._extract_value_from_command(cmd)
+        self.assertIsNotNone(content)
+        self.assertIn("const player = 'X';", content)
+        self.assertIn("function initGame()", content)
+
+    def test_detects_truncated_value_command(self):
+        truncated = "Set-Content -Path 'script.js' -Value 'function init(){\\n  return true;\\n\\"
+        complete = "Set-Content -Path 'script.js' -Value 'function init(){\\n  return true;\\n}'"
+        self.assertTrue(self.gui._is_command_likely_truncated(truncated))
+        self.assertFalse(self.gui._is_command_likely_truncated(complete))
+
+    def test_extract_direct_file_content_from_json_cmd(self):
+        response = """{
+  "cmd1": "<!DOCTYPE html>\\n<html><body><h1>Tris</h1></body></html>"
+}"""
+        content = self.gui._extract_direct_file_content_from_response(response, "index.html")
+        self.assertIsNotNone(content)
+        self.assertIn("<!DOCTYPE html>", content)
+        self.assertIn("<h1>Tris</h1>", content)
+
+    def test_write_direct_step_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            content = "<!DOCTYPE html>\\n<html><body><h1>OK</h1></body></html>"
+            ok = self.gui._write_direct_step_content(p, "index.html", content)
+            self.assertTrue(ok)
+            self.assertTrue((p / "index.html").exists())
+
+    def test_validate_written_step_file_requires_html_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            html = "<!DOCTYPE html>\\n<html><head><link rel='stylesheet' href='style.css'></head><body><script src='script.js'></script></body></html>"
+            (p / "index.html").write_text(html, encoding="utf-8")
+            step_context = {
+                "steps": [
+                    {"num": 1, "filename": "index.html", "status": "done"},
+                    {"num": 2, "filename": "style.css", "status": "pending"},
+                    {"num": 3, "filename": "script.js", "status": "pending"},
+                ]
+            }
+            ok, reason = self.gui._validate_written_step_file(p, step_context, "index.html")
+            self.assertTrue(ok, reason)
+
+            bad_html = "<!DOCTYPE html>\\n<html><head><link rel='stylesheet' href='style.css'></head><body></body></html>"
+            (p / "index.html").write_text(bad_html, encoding="utf-8")
+            ok2, reason2 = self.gui._validate_written_step_file(p, step_context, "index.html")
+            self.assertFalse(ok2)
+            self.assertIn("JS", reason2)
+
+    def test_validate_written_step_file_css_detects_button_selector_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            (p / "index.html").write_text(
+                "<!DOCTYPE html><html><body><button id='reset-btn'>Reset</button><div class='cell'></div></body></html>",
+                encoding="utf-8",
+            )
+            (p / "style.css").write_text(
+                ".cell { color: red; }\n.reset-btn { background: black; }",
+                encoding="utf-8",
+            )
+            step_context = {
+                "steps": [
+                    {"num": 1, "filename": "index.html", "status": "done"},
+                    {"num": 2, "filename": "style.css", "status": "in_progress"},
+                ]
+            }
+            ok, reason = self.gui._validate_written_step_file(p, step_context, "style.css")
+            self.assertFalse(ok)
+            self.assertIn("bottoni", reason.lower())
+
+    def test_validate_written_step_file_js_requires_reset_listener(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            (p / "index.html").write_text(
+                "<!DOCTYPE html><html><body><button id='reset-btn'>Reset</button><div id='status'></div></body></html>",
+                encoding="utf-8",
+            )
+            (p / "script.js").write_text(
+                "const resetBtn = document.getElementById('reset-btn');\n"
+                "const status = document.getElementById('status');\n"
+                "function resetGame(){ status.textContent='ok'; }\n",
+                encoding="utf-8",
+            )
+            step_context = {
+                "steps": [
+                    {"num": 1, "filename": "index.html", "status": "done"},
+                    {"num": 2, "filename": "script.js", "status": "in_progress"},
+                ]
+            }
+            ok, reason = self.gui._validate_written_step_file(p, step_context, "script.js")
+            self.assertFalse(ok)
+            self.assertIn("listener", reason.lower())
+
+            (p / "script.js").write_text(
+                "const resetBtn = document.getElementById('reset-btn');\n"
+                "const status = document.getElementById('status');\n"
+                "function resetGame(){ status.textContent='ok'; }\n"
+                "resetBtn.addEventListener('click', resetGame);\n",
+                encoding="utf-8",
+            )
+            ok2, reason2 = self.gui._validate_written_step_file(p, step_context, "script.js")
+            self.assertTrue(ok2, reason2)
+
+    def test_update_memory_from_file_extracts_html_and_js_refs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            memory = ProjectMemory(p)
+
+            html_content = (
+                "<!DOCTYPE html><html><head>"
+                "<link rel='stylesheet' href='style.css'>"
+                "</head><body>"
+                "<div id='board' class='cell active'></div>"
+                "<button id='reset-btn'>Reset</button>"
+                "<script src='script.js'></script>"
+                "</body></html>"
+            )
+            self.gui._update_memory_from_file(memory, "index.html", html_content)
+            html_contract = memory.get_file_contract("index.html")
+            self.assertIsNotNone(html_contract)
+            elements = html_contract["elements"]
+            self.assertIn("board", elements.get("ids", []))
+            self.assertIn("cell", elements.get("classes", []))
+            self.assertIn("active", elements.get("classes", []))
+            self.assertIn("reset-btn", elements.get("button_ids", []))
+            self.assertEqual(elements.get("has_css_link", ["False"])[0], "True")
+            self.assertEqual(elements.get("has_js_link", ["False"])[0], "True")
+
+            js_content = (
+                "const resetBtn = document.getElementById('reset-btn');\n"
+                "const cells = document.querySelectorAll('.cell');\n"
+                "resetBtn.addEventListener('click', () => {});\n"
+            )
+            self.gui._update_memory_from_file(memory, "script.js", js_content)
+            js_contract = memory.get_file_contract("script.js")
+            self.assertIsNotNone(js_contract)
+            js_elements = js_contract["elements"]
+            self.assertIn("reset-btn", js_elements.get("used_ids", []))
+            self.assertIn(".cell", js_elements.get("used_classes", []))
+
+    def test_build_planning_prompt_fix_includes_existing_files_and_diagnostics(self):
+        prompt = self.gui._build_planning_prompt(
+            "fixa il tris che non resetta",
+            mode="fix",
+            existing_files=["index.html", "style.css", "script.js"],
+            diagnostics=[("script.js", "listener reset mancante")],
+        )
+        self.assertIn("CONTESTO FIX", prompt)
+        self.assertIn("script.js", prompt)
+        self.assertIn("listener reset mancante", prompt)
+        self.assertIn("REGOLE FIX AGGIUNTIVE", prompt)
 
 
 if __name__ == "__main__":

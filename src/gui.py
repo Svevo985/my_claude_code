@@ -72,7 +72,7 @@ class ThinkingAnimation:
         self.label = None
         self.dots = 0
         self.running = False
-        self.frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        self.frames = ["-", "\\", "|", "/"]
         self.messages = ["LLM pensa", "Elabora", "Analizza", "Genera"]
         self.frame_idx = 0
         self.msg_idx = 0
@@ -86,7 +86,7 @@ class ThinkingAnimation:
 
         self.label = tk.Label(
             container,
-            text="",
+            text="============================================================",
             bg=self.bg, fg=self.fg,
             font=("Consolas", 10, "bold")
         )
@@ -127,7 +127,7 @@ class OllamaBridgeGUI:
     def __init__(self, root):
         logger.info("=== AVVIO GUI OLLAMA BRIDGE ===")
         self.root = root
-        self.root.title("🦙 Ollama File System Bridge")
+        self.root.title("Ollama File System Bridge")
         self.root.geometry("1400x800")
         self.root.minsize(1000, 650)
 
@@ -187,7 +187,7 @@ class OllamaBridgeGUI:
         # Inizializza connessione
         self._init_ollama()
 
-    # ── Utils modelli shellbot ──────────────────────────────────────────
+    #  Utils modelli shellbot 
     def _sanitize_model_name(self, name: str) -> str:
         if not name:
             return ""
@@ -297,7 +297,7 @@ class OllamaBridgeGUI:
                 installed.add(target_tag)
             else:
                 # log in chat solo se visibile
-                self._add_message(f"⚠️ Conversione {target_tag} fallita: {out[:120]}", "warning")
+                self._add_message(f" Conversione {target_tag} fallita: {out[:120]}", "warning")
 
     def _load_config(self) -> dict:
         if CONFIG_FILE.exists():
@@ -306,7 +306,7 @@ class OllamaBridgeGUI:
             cfg = {
             "ollama": {
                 "base_url": "http://localhost:11434",
-                "model": "llama3.2",
+                "model": "qwen2.5-coder-shellbot-create:latest",
                 "timeout": 1800
             }
         }
@@ -360,7 +360,7 @@ class OllamaBridgeGUI:
 
         tk.Label(
             title_frame,
-            text="╔═══════════════════════════════════════════════════════════╗",
+            text="============================================================",
             bg=self.colors["accent"], fg="white", font=("Consolas", 9)
         ).pack()
 
@@ -369,19 +369,19 @@ class OllamaBridgeGUI:
 
         tk.Label(
             title_text,
-            text="║   🦙 OLLAMA FILE SYSTEM BRIDGE",
+            text="    OLLAMA FILE SYSTEM BRIDGE",
             bg=self.colors["bg_dark"], fg="white", font=("Consolas", 14, "bold")
         ).pack(anchor=tk.W)
 
         tk.Label(
             title_text,
-            text="║   Interfaccia Grafica per LLM + File System",
+            text="   Interfaccia Grafica per LLM + File System",
             bg=self.colors["bg_dark"], fg=self.colors["gray"], font=("Consolas", 9)
         ).pack(anchor=tk.W)
 
         tk.Label(
             title_frame,
-            text="╚═══════════════════════════════════════════════════════════╝",
+            text="",
             bg=self.colors["accent"], fg="white", font=("Consolas", 9)
         ).pack()
 
@@ -394,7 +394,7 @@ class OllamaBridgeGUI:
 
         # Stato connessione
         self.status_label = tk.Label(
-            status, text="● Disconnesso",
+            status, text=" Disconnesso",
             bg="#f44747", fg="white",
             padx=15, pady=5, font=("Consolas", 9, "bold"),
             relief=tk.FLAT
@@ -452,7 +452,7 @@ class OllamaBridgeGUI:
 
         # Titolo
         tk.Label(
-            inner_frame, text="⚡ COMANDI DISPONIBILI",
+            inner_frame, text=" COMANDI DISPONIBILI",
             bg=self.colors["bg_light"], fg=self.colors["cyan"],
             font=("Consolas", 11, "bold"), pady=10
         ).pack(fill=tk.X)
@@ -460,17 +460,17 @@ class OllamaBridgeGUI:
         # Separator
         ttk.Separator(inner_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10, pady=5)
 
-        # Modalità di lavoro
+        # Modalit di lavoro
         tk.Label(
-            inner_frame, text="📋 MODALITÀ DI LAVORO",
+            inner_frame, text=" MODALIT DI LAVORO",
             bg=self.colors["bg_light"], fg=self.colors["warning"],
             font=("Consolas", 10, "bold"), pady=5
         ).pack(anchor=tk.W, padx=10)
 
         commands = [
-            ("🔧 /fix", "Fixa codice esistente", self._cmd_fix, "Legge file, non crea doc"),
-            ("🆕 /new", "Nuovo progetto", self._cmd_new, "Crea da zero con claude.md"),
-            ("📖 /reverse", "Documentazione", self._cmd_reverse, "Genera DOCUMENTAZIONE.md"),
+            (" /fix", "Fixa codice esistente", self._cmd_fix, "Legge file, non crea doc"),
+            (" /new", "Nuovo progetto", self._cmd_new, "Crea da zero con claude.md"),
+            (" /reverse", "Documentazione", self._cmd_reverse, "Genera DOCUMENTAZIONE.md"),
         ]
 
         for label, desc, cmd, note in commands:
@@ -504,7 +504,7 @@ class OllamaBridgeGUI:
 
         # Gestione sessione
         tk.Label(
-            inner_frame, text="⚙️ GESTIONE",
+            inner_frame, text=" GESTIONE",
             bg=self.colors["bg_light"], fg=self.colors["info"],
             font=("Consolas", 10, "bold"), pady=5
         ).pack(anchor=tk.W, padx=10)
@@ -540,7 +540,7 @@ class OllamaBridgeGUI:
 
         # Modelli disponibili
         tk.Label(
-            inner_frame, text="🤖 MODELLI DISPONIBILI",
+            inner_frame, text=" MODELLI DISPONIBILI",
             bg=self.colors["bg_light"], fg=self.colors["success"],
             font=("Consolas", 10, "bold"), pady=5
         ).pack(anchor=tk.W, padx=10)
@@ -557,7 +557,7 @@ class OllamaBridgeGUI:
 
         # Pulsante refresh
         tk.Button(
-            inner_frame, text="⟳ Aggiorna lista modelli", command=self._refresh_models,
+            inner_frame, text=" Aggiorna lista modelli", command=self._refresh_models,
             bg=self.colors["accent"], fg="white",
             activebackground=self.colors["accent_light"],
             font=("Consolas", 9), relief=tk.FLAT,
@@ -567,7 +567,7 @@ class OllamaBridgeGUI:
         # Info box
         info_box = tk.Label(
             inner_frame,
-            text="💡 Suggerimento:\nUsa /fix per modificare\ncodice esistente.\nUsa /new per creare\nnuovi progetti.",
+            text=" Suggerimento:\nUsa /fix per modificare\ncodice esistente.\nUsa /new per creare\nnuovi progetti.",
             bg=self.colors["bg_dark"], fg=self.colors["gray"],
             font=("Consolas", 8), padx=10, pady=10,
             relief=tk.FLAT, justify=tk.LEFT
@@ -594,7 +594,7 @@ class OllamaBridgeGUI:
 
         # Chat area
         chat_frame = tk.LabelFrame(
-            center_frame, text=" 💬 Chat ",
+            center_frame, text="  Chat ",
             bg=self.colors["bg_light"], fg=self.colors["cyan"],
             font=("Consolas", 10, "bold"), padx=5, pady=5
         )
@@ -619,7 +619,7 @@ class OllamaBridgeGUI:
         input_frame.pack(fill=tk.X, pady=(5, 0))
 
         tk.Label(
-            input_frame, text="»",
+            input_frame, text=">>",
             fg=self.colors["accent"], bg=self.colors["bg_light"],
             font=("Consolas", 14, "bold")
         ).pack(side=tk.LEFT, padx=(0, 5))
@@ -643,7 +643,7 @@ class OllamaBridgeGUI:
 
         # Pulsante STOP (rosso)
         self.stop_btn = tk.Button(
-            btn_frame, text="⏹️ STOP", command=self._stop_inference,
+            btn_frame, text=" STOP", command=self._stop_inference,
             bg=self.colors["error"], fg="white",
             activebackground="#ff6b6b",
             font=("Consolas", 10, "bold"), relief=tk.FLAT,
@@ -653,7 +653,7 @@ class OllamaBridgeGUI:
         self.stop_btn.pack(fill=tk.X, pady=(0, 5))
 
         self.send_btn = tk.Button(
-            btn_frame, text="📤 Invia", command=self._send_message,
+            btn_frame, text=" Invia", command=self._send_message,
             bg=self.colors["success"], fg="black",
             activebackground="#5fd9c0",
             font=("Consolas", 10, "bold"), relief=tk.FLAT,
@@ -662,7 +662,7 @@ class OllamaBridgeGUI:
         self.send_btn.pack(fill=tk.X, pady=(0, 5))
 
         self.clear_btn = tk.Button(
-            btn_frame, text="🗑️ Pulisci", command=self._clear_chat,
+            btn_frame, text=" Pulisci", command=self._clear_chat,
             bg=self.colors["bg_light"], fg=self.colors["fg"],
             activebackground=self.colors["accent"], activeforeground="white",
             font=("Consolas", 9), relief=tk.FLAT,
@@ -707,17 +707,17 @@ class OllamaBridgeGUI:
         """Cerca un modello shellbot con suffisso specifico tra quelli disponibili."""
         if not self.models:
             return None
-        # Priorità 1: modello con suffisso esatto legato a shellbot
+        # Priorit 1: modello con suffisso esatto legato a shellbot
         for m in self.models:
             ml = m.lower()
             if f"shellbot-{suffix}" in ml or f"-shellbot-{suffix}" in ml:
                 return m
-        # Priorità 2: modello che contiene sia 'shellbot' che il suffisso
+        # Priorit 2: modello che contiene sia 'shellbot' che il suffisso
         for m in self.models:
             ml = m.lower()
             if f"{suffix}" in ml and "shellbot" in ml:
                 return m
-        # Priorità 3: fallback su qualsiasi modello che contiene il suffisso (es. gemma4NewCreate)
+        # Priorit 3: fallback su qualsiasi modello che contiene il suffisso (es. gemma4NewCreate)
         for m in self.models:
             ml = m.lower()
             if suffix.lower() in ml:
@@ -729,9 +729,9 @@ class OllamaBridgeGUI:
         self.model_create = self._find_specialized_model("create")
         self.model_docs = self._find_specialized_model("docs")
         if self.model_create:
-            self._add_message(f"🎯 Modello CREATE/FIX: {self.model_create}", "info")
+            self._add_message(f" Modello CREATE/FIX: {self.model_create}", "info")
         if self.model_docs:
-            self._add_message(f"🎯 Modello DOCS/REVERSE: {self.model_docs}", "info")
+            self._add_message(f" Modello DOCS/REVERSE: {self.model_docs}", "info")
 
     def _init_ollama(self):
         """Inizializza la connessione a Ollama."""
@@ -749,22 +749,23 @@ class OllamaBridgeGUI:
                     "num_ctx": 16384,
                     "num_predict": 4096,
                     "num_thread": 6,
+                    "think": False,
                 }
 
                 self.ollama = OllamaClient(base_url, model, timeout, options=ollama_options)
 
                 if not self.ollama.is_available():
-                    self.root.after(0, self._add_message, "⚠️ Ollama non disponibile, tentativo di avvio automatico...", "warning")
+                    self.root.after(0, self._add_message, " Ollama non disponibile, tentativo di avvio automatico...", "warning")
                     success, msg = self.ollama.ensure_available()
                     if not success:
                         self.root.after(0, self._on_connection_failed, f"Ollama non avviabile: {msg}")
                         return
-                    self.root.after(0, self._add_message, f"✅ Ollama avviato: {msg}", "success")
+                    self.root.after(0, self._add_message, f" Ollama avviato: {msg}", "success")
 
                 if self.ollama.is_available():
                     # Autoconversione in varianti shellBot prima di filtrare
                     force_rebuild = self.config.get("ollama", {}).get("force_rebuild_shellbot", False)
-                    # self._auto_convert_models(force=force_rebuild) # ❌ Disabilitato automatismo su richiesta utente
+                    # self._auto_convert_models(force=force_rebuild) #  Disabilitato automatismo su richiesta utente
 
                     all_models = self.ollama.list_models()
                     # Salva TUTTI i modelli, non solo shellbot
@@ -793,7 +794,7 @@ class OllamaBridgeGUI:
 
     def _on_connected(self):
         """Callback per connessione riuscita."""
-        self._set_status("● Connesso", "success")
+        self._set_status(" Connesso", "success")
         self.model_label.config(text=f"Modello: {self.ollama.model}")
         self.session_label.config(text=f"Sessione: {self.session.id[:8] if self.session else '--'}")
 
@@ -806,59 +807,59 @@ class OllamaBridgeGUI:
         if self.models:
             shell_models = [m for m in self.models if "shellbot" in m.lower()]
             if shell_models:
-                self._add_message(f"📦 {len(shell_models)} modelli shellBot su {len(self.models)} totali:", "success")
+                self._add_message(f" {len(shell_models)} modelli shellBot su {len(self.models)} totali:", "success")
             else:
-                self._add_message(f"📦 {len(self.models)} modelli disponibili (nessuno shellBot):", "warning")
+                self._add_message(f" {len(self.models)} modelli disponibili (nessuno shellBot):", "warning")
             
             for i, m in enumerate(self.models, 1):
                 is_shell = "shellbot" in m.lower()
                 is_active = m == self.ollama.model
                 if is_active:
-                    prefix = "► "
+                    prefix = " "
                 elif is_shell:
-                    prefix = f"🤖 {i}. "
+                    prefix = f" {i}. "
                 else:
                     prefix = f"   {i}. "
                 self.models_listbox.insert(tk.END, f"{prefix}{m}")
                 self._add_message(f"  {prefix}{m}", "model_list")
         else:
-            self._add_message("⚠️ Nessun modello disponibile", "warning")
+            self._add_message(" Nessun modello disponibile", "warning")
 
         self.input_field.focus()
 
     def _show_welcome_banner(self):
         """Mostra banner di benvenuto con info complete."""
-        self._add_message("╔═══════════════════════════════════════════════════════════╗", "banner")
-        self._add_message("║   Benvenuto in Ollama File System Bridge!                 ║", "banner")
-        self._add_message("╚═══════════════════════════════════════════════════════════╝", "banner")
+        self._add_message("============================================================", "banner")
+        self._add_message("   Benvenuto in Ollama File System Bridge!                 ", "banner")
+        self._add_message("============================================================", "banner")
         self._add_message("", "info")
         os_name = self.env_info.get("system", "?")
         shell_desc = self.env_info.get("description", "?")
         self._add_message(f"OS: {os_name} | Shell: {shell_desc}", "info")
         self._add_message("", "info")
-        self._add_message(f"🤖 Modello attivo: {self.ollama.model}", "success")
+        self._add_message(f" Modello attivo: {self.ollama.model}", "success")
         self._add_message("", "info")
-        self._add_message("💡 MODALITÀ DISPONIBILI:", "system")
-        self._add_message("   🔧 /fix   - Fixa codice esistente (legge file, non crea doc)", "info")
-        self._add_message("   🆕 /new   - Crea nuovo progetto da zero (con claude.md)", "info")
-        self._add_message("   📖 /reverse - Genera documentazione (DOCUMENTAZIONE.md)", "info")
+        self._add_message(" MODALIT DISPONIBILI:", "system")
+        self._add_message("    /fix   - Fixa codice esistente (legge file, non crea doc)", "info")
+        self._add_message("    /new   - Crea nuovo progetto da zero (con claude.md)", "info")
+        self._add_message("    /reverse - Genera documentazione (DOCUMENTAZIONE.md)", "info")
         self._add_message("", "info")
-        self._add_message("⚙️ COMANDI UTILI:", "system")
+        self._add_message(" COMANDI UTILI:", "system")
         self._add_message("   /help  - Mostra tutti i comandi", "info")
         self._add_message("   /model <nome> - Cambia modello", "info")
         self._add_message("   /context - Mostra claude.md corrente", "info")
         self._add_message("   /safe, /auto, /test - Toggle impostazioni", "info")
         self._add_message("", "info")
-        self._add_message("⏹️ Premi STOP per interrompere l'inferenza in corso", "warning")
+        self._add_message(" Premi STOP per interrompere l'inferenza in corso", "warning")
         self._add_message("", "info")
 
     def _on_connection_failed(self, error):
         """Callback per connessione fallita."""
-        self._set_status("● Disconnesso", "error")
+        self._set_status(" Disconnesso", "error")
         self.model_label.config(text="Modello: --")
-        self._add_message(f"❌ Errore connessione: {error}", "error")
-        self._add_message("💡 Assicurati che 'ollama serve' sia in esecuzione.", "warning")
-        self._add_message("   Poi clicca '⟳ Aggiorna lista modelli'", "info")
+        self._add_message(f" Errore connessione: {error}", "error")
+        self._add_message(" Assicurati che 'ollama serve' sia in esecuzione.", "warning")
+        self._add_message("   Poi clicca ' Aggiorna lista modelli'", "info")
 
     def _set_status(self, text, status_type):
         """Imposta lo stato nella barra."""
@@ -877,10 +878,10 @@ class OllamaBridgeGUI:
         timestamp = datetime.now().strftime("%H:%M:%S")
 
         if msg_type == "user":
-            prefix = "» TU"
+            prefix = " TU"
             tag = "user"
         elif msg_type == "ai":
-            prefix = "🤖 AI"
+            prefix = " AI"
             tag = "ai"
         else:
             prefix = ""
@@ -903,8 +904,8 @@ class OllamaBridgeGUI:
             self.stop_flag = True
             self.is_thinking = False
             self.thinking_anim.stop()
-            self._set_status("● Interrotto", "warning")
-            self._add_message("⏹️ Inferenza interrotta dall'utente", "warning")
+            self._set_status(" Interrotto", "warning")
+            self._add_message(" Inferenza interrotta dall'utente", "warning")
 
             # Abilita pulsanti
             self.send_btn.config(state=tk.NORMAL)
@@ -921,21 +922,21 @@ class OllamaBridgeGUI:
             return
 
         if not self.connected or not self.ollama:
-            messagebox.showwarning("Attenzione", "Ollama non è connesso!\nControlla che 'ollama serve' sia attivo.")
+            messagebox.showwarning("Attenzione", "Ollama non  connesso!\nControlla che 'ollama serve' sia attivo.")
             return
 
-        # ✅ CONTROLLA SE È UN COMANDO LOCALE (inizia con /)
+        #  CONTROLLA SE  UN COMANDO LOCALE (inizia con /)
         if message.startswith('/'):
             self._execute_local_command(message)
             return
 
-        # ✅ Auto-detect reverse engineering da richiesta naturale con path
+        #  Auto-detect reverse engineering da richiesta naturale con path
         auto_path = self._extract_path_from_text(message)
         if auto_path and (self._looks_like_reverse_intent(message) or self._is_just_path(message, auto_path)):
             self._add_message(message, "user")
             self.input_field.delete("1.0", tk.END)
             self.stop_flag = False
-            self._add_message(f"📖 Reverse Engineering di: {auto_path}", "info")
+            self._add_message(f" Reverse Engineering di: {auto_path}", "info")
             self._reverse_engineer_gui(auto_path)
             return
 
@@ -973,12 +974,12 @@ class OllamaBridgeGUI:
             if args:
                 self._change_model(args)
             else:
-                self._add_message(f"🤖 Modello corrente: {self.ollama.model}", "info")
-                self._add_message("💡 Usa: /model <nome_modello>", "info")
+                self._add_message(f" Modello corrente: {self.ollama.model}", "info")
+                self._add_message(" Usa: /model <nome_modello>", "info")
                 if self.models:
-                    self._add_message("📋 Modelli disponibili:", "info")
+                    self._add_message(" Modelli disponibili:", "info")
                     for i, m in enumerate(self.models, 1):
-                        cur = "► " if m == self.ollama.model else f"{i}. "
+                        cur = " " if m == self.ollama.model else f"{i}. "
                         self._add_message(f"  {cur}{m}", "model_list")
 
         elif command == '/context':
@@ -998,7 +999,7 @@ class OllamaBridgeGUI:
 
         elif command == '/fix':
             self.mode = 'fix'
-            # NON cambiare modello se l'utente ha scelto un modello "full coder" come qwen3.5
+            # NON cambiare modello se l'utente ha scelto un modello "full coder" (es. qwen2.5-coder)
             current_model_lower = (self.ollama.model or "").lower()
             is_full_coder = any(x in current_model_lower for x in ['qwen', 'coder', 'sushi'])
             
@@ -1006,21 +1007,21 @@ class OllamaBridgeGUI:
                 tag = self.model_create or (self.models[0] if self.models else None)
                 if tag and self.ollama and self.ollama.model != tag:
                     self.ollama.model = tag
-                    self._add_message(f"🔄 Modello: {tag} (CREATE/FIX)", "info")
+                    self._add_message(f" Modello: {tag} (CREATE/FIX)", "info")
                 elif not tag:
-                    self._add_message("⚠️ Nessun modello shellbot CREATE trovato", "warning")
+                    self._add_message(" Nessun modello shellbot CREATE trovato", "warning")
             else:
-                self._add_message(f"✅ Uso {self.ollama.model} (modelllo completo - pianifico + eseguo)", "info")
+                self._add_message(f" Uso {self.ollama.model} (modelllo completo - pianifico + eseguo)", "info")
             
-            self._add_message("🔧 Modalità FIX attivata", "success")
-            self._add_message("  • Leggerà file esistenti prima di agire", "info")
-            self._add_message("  • Non creerà README.md (usa claude.md)", "info")
-            self._add_message("  • Aggiornerà claude.md con i fix effettuati", "info")
-            self._add_message("💡 Ora scrivi la richiesta di fix (es: 'fixa il gioco che non parte')", "system")
+            self._add_message(" Modalit FIX attivata", "success")
+            self._add_message("   Legger file esistenti prima di agire", "info")
+            self._add_message("   Non creer README.md (usa claude.md)", "info")
+            self._add_message("   Aggiorner claude.md con i fix effettuati", "info")
+            self._add_message(" Ora scrivi la richiesta di fix con path (es: 'fixa il gioco in C:\\path\\progetto')", "system")
 
         elif command == '/new':
             self.mode = 'new'
-            # NON cambiare modello se l'utente ha scelto un modello "full coder" come qwen3.5
+            # NON cambiare modello se l'utente ha scelto un modello "full coder" (es. qwen2.5-coder)
             current_model_lower = (self.ollama.model or "").lower()
             is_full_coder = any(x in current_model_lower for x in ['qwen', 'coder', 'sushi'])
             
@@ -1028,35 +1029,35 @@ class OllamaBridgeGUI:
                 tag = self.model_create or (self.models[0] if self.models else None)
                 if tag and self.ollama and self.ollama.model != tag:
                     self.ollama.model = tag
-                    self._add_message(f"🔄 Modello: {tag} (CREATE/FIX)", "info")
+                    self._add_message(f" Modello: {tag} (CREATE/FIX)", "info")
                 elif not tag:
-                    self._add_message("⚠️ Nessun modello shellbot CREATE trovato", "warning")
+                    self._add_message(" Nessun modello shellbot CREATE trovato", "warning")
             else:
-                self._add_message(f"✅ Uso {self.ollama.model} (modelllo completo - pianifico + eseguo)", "info")
+                self._add_message(f" Uso {self.ollama.model} (modelllo completo - pianifico + eseguo)", "info")
             
-            self._add_message("🆕 Modalità NEW PROJECT attivata", "success")
-            self._add_message("  • Può creare claude.md per tracciamento", "info")
-            self._add_message("  • Struttura completa del progetto", "info")
-            self._add_message("💡 Ora scrivi cosa creare (es: 'crea un gioco del tris in /path')", "system")
+            self._add_message(" Modalit NEW PROJECT attivata", "success")
+            self._add_message("   Pu creare claude.md per tracciamento", "info")
+            self._add_message("   Struttura completa del progetto", "info")
+            self._add_message(" Ora scrivi cosa creare (es: 'crea un gioco del tris in /path')", "system")
 
         elif command == '/reverse':
             if args:
                 target_path = Path(self._strip_surrounding_quotes(args.strip()))
                 if not target_path.exists():
-                    self._add_message(f"❌ Path non trovato: {target_path}", "error")
+                    self._add_message(f" Path non trovato: {target_path}", "error")
                     return
-                self._add_message(f"📖 Reverse Engineering di: {target_path}", "info")
+                self._add_message(f" Reverse Engineering di: {target_path}", "info")
                 self._reverse_engineer_gui(target_path)
             else:
-                self._add_message("📖 Reverse Engineering", "info")
-                self._add_message("💡 Usa: /reverse /path/del/progetto", "system")
+                self._add_message(" Reverse Engineering", "info")
+                self._add_message(" Usa: /reverse /path/del/progetto", "system")
 
         elif command == '/session' or command == '/sessions':
-            self._add_message(f"📋 Sessione corrente: {self.session.id if self.session else 'Nessuna'}", "info")
+            self._add_message(f" Sessione corrente: {self.session.id if self.session else 'Nessuna'}", "info")
 
         else:
-            self._add_message(f"❌ Comando sconosciuto: {command}", "error")
-            self._add_message("💡 Usa /help per vedere tutti i comandi", "info")
+            self._add_message(f" Comando sconosciuto: {command}", "error")
+            self._add_message(" Usa /help per vedere tutti i comandi", "info")
 
     def _strip_surrounding_quotes(self, text: str) -> str:
         t = text.strip()
@@ -1105,16 +1106,16 @@ class OllamaBridgeGUI:
 
     def _show_help(self):
         """Mostra aiuto completo."""
-        self._add_message("╔═══════════════════════════════════════════════════════════╗", "banner")
-        self._add_message("║   COMANDI DISPONIBILI                                     ║", "banner")
-        self._add_message("╚═══════════════════════════════════════════════════════════╝", "banner")
+        self._add_message("", "banner")
+        self._add_message("   COMANDI DISPONIBILI                                     ", "banner")
+        self._add_message("", "banner")
         self._add_message("", "info")
-        self._add_message("📋 MODALITÀ DI LAVORO:", "system")
-        self._add_message("  🔧 /fix         - Fixa codice esistente", "info")
-        self._add_message("  🆕 /new         - Crea nuovo progetto da zero", "info")
-        self._add_message("  📖 /reverse     - Genera documentazione", "info")
+        self._add_message(" MODALIT DI LAVORO:", "system")
+        self._add_message("   /fix         - Fixa codice esistente", "info")
+        self._add_message("   /new         - Crea nuovo progetto da zero", "info")
+        self._add_message("   /reverse     - Genera documentazione", "info")
         self._add_message("", "info")
-        self._add_message("⚙️ GESTIONE:", "system")
+        self._add_message(" GESTIONE:", "system")
         self._add_message("  /help          - Mostra questo aiuto", "info")
         self._add_message("  /model <nome>  - Cambia modello LLM", "info")
         self._add_message("  /context       - Mostra claude.md corrente", "info")
@@ -1124,7 +1125,7 @@ class OllamaBridgeGUI:
         self._add_message("  /clear         - Pulisci la chat", "info")
         self._add_message("  /exit          - Esci dall'applicazione", "info")
         self._add_message("", "info")
-        self._add_message("💡 Esempi:", "system")
+        self._add_message(" Esempi:", "system")
         self._add_message("  /fix", "code")
         self._add_message("  fixa il gioco del tris che non parte", "code")
         self._add_message("", "info")
@@ -1135,7 +1136,7 @@ class OllamaBridgeGUI:
 
     def _change_model(self, model_name):
         """Cambia il modello LLM."""
-        self._add_message(f"⟳ Cambio modello: {model_name}...", "info")
+        self._add_message(f" Cambio modello: {model_name}...", "info")
 
         # Cerca il modello nella lista
         model_found = None
@@ -1159,14 +1160,14 @@ class OllamaBridgeGUI:
                 pass
 
             self.model_label.config(text=f"Modello: {model_found}")
-            self._add_message(f"✓ Modello cambiato: {model_found}", "success")
+            self._add_message(f" Modello cambiato: {model_found}", "success")
 
             # Nuova sessione con nuovo modello
             self.session = self.session_manager.create_session()
             self.session_label.config(text=f"Sessione: {self.session.id[:8]}")
         else:
-            self._add_message(f"❌ Modello non trovato: {model_name}", "error")
-            self._add_message("💡 Usa /model senza argomenti per vedere la lista", "info")
+            self._add_message(f" Modello non trovato: {model_name}", "error")
+            self._add_message(" Usa /model senza argomenti per vedere la lista", "info")
 
     def _show_context(self):
         """Mostra il contenuto di claude.md se esiste."""
@@ -1178,32 +1179,32 @@ class OllamaBridgeGUI:
             if claude_path.exists():
                 try:
                     content = claude_path.read_text(encoding='utf-8', errors='replace')
-                    self._add_message("📄 Contenuto di claude.md:", "info")
-                    self._add_message("─" * 60, "system")
+                    self._add_message(" Contenuto di claude.md:", "info")
+                    self._add_message("" * 60, "system")
                     for line in content.split('\n')[:50]:  # Max 50 righe
                         self._add_message(line, "code")
                     if len(content.split('\n')) > 50:
                         self._add_message("... (troncato)", "info")
                 except Exception as exc:
-                    self._add_message(f"❌ Errore lettura: {e}", "error")
+                    self._add_message(f" Errore lettura: {e}", "error")
             else:
-                self._add_message("⚠️ Nessun claude.md trovato nella directory corrente", "warning")
+                self._add_message(" Nessun claude.md trovato nella directory corrente", "warning")
         else:
-            self._add_message("⚠️ Directory di lavoro non impostata", "warning")
+            self._add_message(" Directory di lavoro non impostata", "warning")
 
     def _reverse_engineer_gui(self, target: Path):
-        """Genera documentazione per un progetto in modalità GUI."""
+        """Genera documentazione per un progetto in modalit GUI."""
         import pathlib
         
         def reverse_thread():
             self.is_thinking = True
-            self.root.after(0, lambda: self._set_status("● Reverse engineering...", "warning"))
+            self.root.after(0, lambda: self._set_status(" Reverse engineering...", "warning"))
             self.root.after(0, lambda: self.thinking_anim.start(self.thinking_container))
             
             try:
                 self._reverse_log(f"reverse_start target={target}")
                 # Scansione struttura e indice file
-                self.root.after(0, lambda: self._add_message(f"📂 Scansione struttura: {target}", "info"))
+                self.root.after(0, lambda: self._add_message(f" Scansione struttura: {target}", "info"))
                 candidates, stats = collect_candidate_files_with_stats(target, max_files=200)
                 self._reverse_log(f"stats_seen_files={stats.get('seen_files')}")
                 self._reverse_log(f"stats_ignored_dirs={stats.get('ignored_dirs')}")
@@ -1221,7 +1222,7 @@ class OllamaBridgeGUI:
                 self._reverse_log(f"policy_limited={policy.get('limited')} limit={policy.get('limit')}")
                 self.root.after(0, lambda d=policy.get("docs", []), r=policy.get("source_roots", []), c=policy.get("candidates_after", 0):
                     self._add_message(
-                        f"📌 Policy: docs={d if d else 'none'} | roots={r if r else 'all'} | candidati={c}",
+                        f" Policy: docs={d if d else 'none'} | roots={r if r else 'all'} | candidati={c}",
                         "info",
                     )
                 )
@@ -1230,19 +1231,19 @@ class OllamaBridgeGUI:
                 ignored = stats.get("ignored_ext", 0) + stats.get("ignored_size", 0) + stats.get("ignored_other", 0)
                 self.root.after(0, lambda s=seen_files, i=ignored, c=len(candidates), d=stats.get("ignored_dirs", 0):
                     self._add_message(
-                        f"📊 File visti: {s} | scartati scan: {i} | candidati(post-policy): {c} | dir ignorate: {d}",
+                        f" File visti: {s} | scartati scan: {i} | candidati(post-policy): {c} | dir ignorate: {d}",
                         "info",
                     )
                 )
                 self.root.after(0, lambda e=policy.get("excluded_tests", 0), cfg=policy.get("excluded_config", 0), lim=policy.get("limited", False), l=policy.get("limit", 0):
                     self._add_message(
-                        f"🧹 Policy: test esclusi={e} | config esclusi={cfg} | limite candidati={l} | limitato={lim}",
+                        f" Policy: test esclusi={e} | config esclusi={cfg} | limite candidati={l} | limitato={lim}",
                         "info",
                     )
                 )
                 if not candidates:
                     self._reverse_log("no_candidates")
-                    self.root.after(0, lambda: self._add_message("❌ Nessun file rilevante trovato", "error"))
+                    self.root.after(0, lambda: self._add_message(" Nessun file rilevante trovato", "error"))
                     return
                 tree = build_tree_from_paths(
                     [rel for rel, _, _ in candidates],
@@ -1252,7 +1253,7 @@ class OllamaBridgeGUI:
                 self._reverse_log(f"tree_lines={tree.count(chr(10)) + 1 if tree else 0}")
                 index_text, allowed_set = format_candidate_index(candidates)
 
-                # Rileva se è un progetto Java PRIMA della selezione
+                # Rileva se  un progetto Java PRIMA della selezione
                 # Controlla se esistono file .java e pom.xml/build.gradle nella root
                 has_java_files = any(
                     item[0].suffix.lower() == ".java"
@@ -1263,16 +1264,16 @@ class OllamaBridgeGUI:
                 is_spring = _is_spring_boot_project(target) if is_java_project else False
                 
                 if is_spring:
-                    self.root.after(0, lambda: self._add_message("🍃 Rilevato progetto SPRING BOOT - Priorità alle classi @Service", "success"))
+                    self.root.after(0, lambda: self._add_message(" Rilevato progetto SPRING BOOT - Priorit alle classi @Service", "success"))
                     self._reverse_log("spring_boot_project=True")
                 
                 java_instruction = ""
                 if is_java_project:
                     java_instruction = """
-⚠️ PROGETTO JAVA MICROSERVIZIO - REGOLE SPECIALI:
-- PRIORITÀ 1: Leggi TUTTE le classi *Service.java (contengono la logica di business)
-- PRIORITÀ 2: Leggi le classi *Controller.java (API endpoint) e la classe Application principale
-- PRIORITÀ 3: Leggi *Repository.java e DTO solo se necessario per contesto
+ PROGETTO JAVA MICROSERVIZIO - REGOLE SPECIALI:
+- PRIORIT 1: Leggi TUTTE le classi *Service.java (contengono la logica di business)
+- PRIORIT 2: Leggi le classi *Controller.java (API endpoint) e la classe Application principale
+- PRIORIT 3: Leggi *Repository.java e DTO solo se necessario per contesto
 - Concentrati sulla logica di business nei Service layer
 """
 
@@ -1300,7 +1301,7 @@ Non usare comandi shell, solo READ + path relativo."""
                 select_resp = ""
                 for chunk in self.ollama.chat(self.session.to_ollama_messages(), stream=True):
                     if self.stop_flag:
-                        self.root.after(0, lambda: self._add_message("⏹️ [Interrotto]", "warning"))
+                        self.root.after(0, lambda: self._add_message(" [Interrotto]", "warning"))
                         break
                     select_resp += chunk
                 self._reverse_log(f"select_resp_len={len(select_resp)}")
@@ -1315,7 +1316,7 @@ Non usare comandi shell, solo READ + path relativo."""
                 else:
                     self._reverse_log("select_parse_failed")
                     
-                # Per progetti Java: includi SEMPRE le classi Service (priorità massima)
+                # Per progetti Java: includi SEMPRE le classi Service (priorit massima)
                 java_services = []
                 java_controllers = []
                 if is_java_project:
@@ -1325,11 +1326,11 @@ Non usare comandi shell, solo READ + path relativo."""
                         self._reverse_log(f"java_services_found={len(java_services)}")
                         if is_spring:
                             self.root.after(0, lambda n=len(java_services):
-                                self._add_message(f"🍃 {n} classi Service Spring trovate - INCLUSE AUTOMATICAMENTE", "success")
+                                self._add_message(f" {n} classi Service Spring trovate - INCLUSE AUTOMATICAMENTE", "success")
                             )
                         else:
                             self.root.after(0, lambda n=len(java_services):
-                                self._add_message(f"📦 Trovate {n} classi Service Java", "info")
+                                self._add_message(f" Trovate {n} classi Service Java", "info")
                             )
 
                 if not selected_by_llm:
@@ -1340,7 +1341,7 @@ Non usare comandi shell, solo READ + path relativo."""
                 # Costruisci lista finale: PRIMA le Service (se Spring), poi le altre selezionate
                 selected = []
                 
-                # Se è Spring Boot: metti Service ALL'INIZIO assolutamente
+                # Se  Spring Boot: metti Service ALL'INIZIO assolutamente
                 if is_spring and java_services:
                     selected.extend(java_services)
                     self._reverse_log(f"spring_services_added_first={len(java_services)}")
@@ -1350,7 +1351,7 @@ Non usare comandi shell, solo READ + path relativo."""
                     if item not in selected:
                         selected.append(item)
                 
-                # Aggiungi Controller se non sono già inclusi (max 15 file totali)
+                # Aggiungi Controller se non sono gi inclusi (max 15 file totali)
                 if java_controllers:
                     for ctrl in java_controllers:
                         if ctrl not in selected and len(selected) < 15:
@@ -1370,12 +1371,12 @@ Non usare comandi shell, solo READ + path relativo."""
                 llm_list = "\n".join([f"- {p.as_posix()}" for p in selected_by_llm])
                 label = "File selezionati dall'LLM" if selection_source == "llm" else "File selezionati di default"
                 self.root.after(0, lambda s=llm_list, n=len(selected_by_llm), l=label:
-                    self._add_message(f"📚 {l} ({n}):\n{s}", "code")
+                    self._add_message(f" {l} ({n}):\n{s}", "code")
                 )
                 if added_docs:
                     added_list = "\n".join([f"- {p.as_posix()}" for p in added_docs])
                     self.root.after(0, lambda s=added_list:
-                        self._add_message(f"📎 File aggiunti dal bridge (docs):\n{s}", "code")
+                        self._add_message(f" File aggiunti dal bridge (docs):\n{s}", "code")
                     )
 
                 files_content, read_stats = read_files_content_with_stats(
@@ -1385,10 +1386,10 @@ Non usare comandi shell, solo READ + path relativo."""
                 self._reverse_log(f"files_read={read_stats.get('files_read')} total_chars={read_stats.get('total_chars')} truncated={read_stats.get('truncated')}")
                 if not files_content:
                     self._reverse_log("no_files_content")
-                    self.root.after(0, lambda: self._add_message("❌ Nessun contenuto letto", "error"))
+                    self.root.after(0, lambda: self._add_message(" Nessun contenuto letto", "error"))
                     return
                 self.root.after(0, lambda r=read_stats.get("files_read", 0), ch=read_stats.get("total_chars", 0):
-                    self._add_message(f"📥 File letti: {r} | caratteri totali: {ch}", "info")
+                    self._add_message(f" File letti: {r} | caratteri totali: {ch}", "info")
                 )
 
                 # Fase 2: genera documentazione
@@ -1397,14 +1398,14 @@ Non usare comandi shell, solo READ + path relativo."""
                 original_num_ctx = self.ollama.options.get('num_ctx', 8192)
                 original_timeout = self.ollama.timeout
                 self.ollama.options['num_ctx'] = 16384
-                self.ollama.options['num_predict'] = 8192  # Più spazio per documentazione completa
+                self.ollama.options['num_predict'] = 8192  # Pi spazio per documentazione completa
                 self.ollama.timeout = 600  # 10 minuti timeout
                 self._reverse_log("llm_options num_ctx=16384 num_predict=8192 timeout=600")
 
                 java_doc_instruction = ""
                 if is_java_project:
                     java_doc_instruction = """
-⚠️ PROGETTO JAVA MICROSERVIZIO - ISTRUZIONI SPECIALI:
+ PROGETTO JAVA MICROSERVIZIO - ISTRUZIONI SPECIALI:
 - Concentrati sulle classi Service: descrivi la logica di business di ogni metodo pubblico
 - Per ogni Service: elenca le dipendenze iniettate (@Autowired, constructor injection)
 - Documenta le chiamate esterne: database (Repository), API esterne (RestTemplate, WebClient)
@@ -1441,7 +1442,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                 response = ""
                 for chunk in self.ollama.chat(self.session.to_ollama_messages(), stream=True):
                     if self.stop_flag:
-                        self.root.after(0, lambda: self._add_message("⏹️ [Interrotto]", "warning"))
+                        self.root.after(0, lambda: self._add_message(" [Interrotto]", "warning"))
                         break
                     response += chunk
                 self._reverse_log(f"final_resp_len={len(response)}")
@@ -1453,28 +1454,28 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                 self.root.after(0, lambda: self.thinking_anim.stop())
 
                 if response:
-                    self.root.after(0, lambda: self._add_message(f"📝 Response ({len(response)} chars):", "info"))
+                    self.root.after(0, lambda: self._add_message(f" Response ({len(response)} chars):", "info"))
                     self.root.after(0, lambda: self._add_message(response[:2000] + ("..." if len(response) > 2000 else ""), "code"))
 
                     parsed = self.parser.parse(response)
                     if parsed.is_valid and parsed.commands:
                         self._reverse_log(f"final_commands={len(parsed.commands)}")
-                        self.root.after(0, lambda: self._add_message(f"✓ {len(parsed.commands)} comandi", "success"))
+                        self.root.after(0, lambda: self._add_message(f" {len(parsed.commands)} comandi", "success"))
                         for i, cmd in enumerate(parsed.commands, 1):
                             ok, out = self.file_ops.execute_command(cmd)
                             if ok:
-                                self.root.after(0, lambda idx=i: self._add_message(f"✓ Comando {idx} eseguito", "success"))
+                                self.root.after(0, lambda idx=i: self._add_message(f" Comando {idx} eseguito", "success"))
                             else:
-                                self.root.after(0, lambda e=out, idx=i: self._add_message(f"✗ Comando {idx}: {e}", "error"))
+                                self.root.after(0, lambda e=out, idx=i: self._add_message(f" Comando {idx}: {e}", "error"))
 
                         doc_file = target / "DOCUMENTAZIONE.md"
                         if doc_file.exists():
-                            self.root.after(0, lambda: self._add_message(f"📝 Documentazione salvata: {doc_file}", "success"))
+                            self.root.after(0, lambda: self._add_message(f" Documentazione salvata: {doc_file}", "success"))
                             content = doc_file.read_text(encoding='utf-8', errors='replace')[:1500]
                             self.root.after(0, lambda c=content: self._add_message(f"\n{c}...", "code"))
                     else:
                         # fallback: salva response come doc se contiene markdown
-                        self.root.after(0, lambda: self._add_message("💡 Salvataggio manuale della documentazione...", "info"))
+                        self.root.after(0, lambda: self._add_message(" Salvataggio manuale della documentazione...", "info"))
                         doc_file = target / "DOCUMENTAZIONE.md"
                         md_start = response.find('# ')
                         if md_start >= 0:
@@ -1484,19 +1485,19 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                             doc_content = re.sub(r'\n{3,}', '\n\n', doc_content)
                             try:
                                 doc_file.write_text(doc_content)
-                                self.root.after(0, lambda: self._add_message(f"📝 Documentazione salvata: {doc_file}", "success"))
-                                self.root.after(0, lambda: self._add_message("✅ Contenuto convertito: \\n → newline reali", "info"))
+                                self.root.after(0, lambda: self._add_message(f" Documentazione salvata: {doc_file}", "success"))
+                                self.root.after(0, lambda: self._add_message(" Contenuto convertito: \\n  newline reali", "info"))
                             except Exception as exc:
-                                self.root.after(0, lambda e=e: self._add_message(f"⚠️ Salvataggio fallito: {e}", "warning"))
+                                self.root.after(0, lambda e=e: self._add_message(f" Salvataggio fallito: {e}", "warning"))
                 else:
-                    self.root.after(0, lambda: self._add_message("⚠️ Nessuna risposta", "warning"))
+                    self.root.after(0, lambda: self._add_message(" Nessuna risposta", "warning"))
                     
             except Exception as exc:
                 error_msg = str(exc)
-                self.root.after(0, lambda err=error_msg: self._add_message(f"❌ Errore: {err}", "error"))
+                self.root.after(0, lambda err=error_msg: self._add_message(f" Errore: {err}", "error"))
             finally:
                 self.is_thinking = False
-                self.root.after(0, lambda: self._set_status("● Connesso", "success"))
+                self.root.after(0, lambda: self._set_status(" Connesso", "success"))
                 self.root.after(0, lambda: self.send_btn.config(state=tk.NORMAL))
         
         threading.Thread(target=reverse_thread, daemon=True).start()
@@ -1511,11 +1512,11 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
         except:
             pass
         status = "ON" if self.state['safe'] else "OFF"
-        self._add_message(f"🛡️ Safety: {status}", "success")
+        self._add_message(f" Safety: {status}", "success")
         if self.state['safe']:
-            self._add_message("  • Comandi distruttivi richiederanno conferma", "info")
+            self._add_message("   Comandi distruttivi richiederanno conferma", "info")
         else:
-            self._add_message("  • Attenzione: comandi distruttivi eseguiti senza conferma", "warning")
+            self._add_message("   Attenzione: comandi distruttivi eseguiti senza conferma", "warning")
 
     def _toggle_auto(self):
         """Toggle auto-continue."""
@@ -1526,7 +1527,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
         except:
             pass
         status = "ON" if self.state['auto_c'] else "OFF"
-        self._add_message(f"🔁 Auto-continue: {status}", "success")
+        self._add_message(f" Auto-continue: {status}", "success")
 
     def _toggle_test(self):
         """Toggle auto-test."""
@@ -1537,24 +1538,24 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
         except:
             pass
         status = "ON" if self.state['auto_t'] else "OFF"
-        self._add_message(f"🧪 Auto-test: {status}", "success")
+        self._add_message(f" Auto-test: {status}", "success")
 
     def _process_message(self, user_message):
         """Elabora il messaggio con LLM in thread separato."""
 
         # Controlli preliminari
         if not self.session:
-            self._add_message("⚠️ Sessione non inizializzata, ne creo una nuova...", "warning")
+            self._add_message(" Sessione non inizializzata, ne creo una nuova...", "warning")
             self._new_session()
 
         if not self.ollama or not self.connected:
-            self._add_message("❌ Ollama non è connesso", "error")
-            self._add_message("💡 Verifica che 'ollama serve' sia in esecuzione", "info")
+            self._add_message(" Ollama non  connesso", "error")
+            self._add_message(" Verifica che 'ollama serve' sia in esecuzione", "info")
             return
 
         def process(Path=Path):
             self.is_thinking = True
-            self.root.after(0, lambda: self._set_status("● Pensando...", "warning"))
+            self.root.after(0, lambda: self._set_status(" Pensando...", "warning"))
             self.root.after(0, lambda: self.thinking_anim.start(self.thinking_container))
 
             # Disabilita pulsanti
@@ -1562,7 +1563,7 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
             self.root.after(0, lambda: self.stop_btn.config(state=tk.NORMAL))
 
             try:
-                # ✅ ESTRAI PATH dal messaggio utente (per /fix o fix di progetto esistente)
+                #  ESTRAI PATH dal messaggio utente (per /fix o fix di progetto esistente)
                 # path_match = re.search(r'(/[a-zA-Z0-9_./-]+)', user_message)
                 auto_path = self._extract_path_from_text(user_message)
                 project_path = None
@@ -1571,25 +1572,35 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                     if not project_path.exists():
                         project_path = None
 
-                # ✅ WORKFLOW AGENTICO INTERATIVO PER '/new'
-                if getattr(self, 'mode', 'default') == 'new':
+                # WORKFLOW AGENTICO DETERMINISTICO PER /new e /fix
+                current_mode = getattr(self, 'mode', 'default')
+                if current_mode in {'new', 'fix'}:
+                    if current_mode == 'fix' and not project_path:
+                        # In /fix, se il path non e' nel messaggio, usa la directory corrente selezionata in GUI.
+                        try:
+                            project_path = Path(self.file_ops.working_directory)
+                        except Exception:
+                            project_path = Path(".")
+                        if not project_path.exists():
+                            self.root.after(0, lambda: self._add_message(" [ERR] Path progetto non valido per /fix", "error"))
+                            return
                     self._execute_agentic_workflow(user_message, project_path)
                     return
 
-                # ✅ RILEVA MODALITÀ /reverse
+                #  RILEVA MODALIT /reverse
                 is_reverse = "/reverse" in user_message.lower() or "reverse" in user_message.lower() or "documentazione" in user_message.lower()
 
-                # ✅ LEGGI FILE ESISTENTI se è un fix o reverse di progetto esistente
+                #  LEGGI FILE ESISTENTI se  un fix o reverse di progetto esistente
                 file_context = ""
                 if project_path and project_path.exists():
-                    self.root.after(0, lambda: self._add_message(f"📂 Lettura file da: {project_path}", "info"))
+                    self.root.after(0, lambda: self._add_message(f" Lettura file da: {project_path}", "info"))
 
                     # Leggi file di codice + config + doc
                     code_files = []
                     
                     if is_reverse:
                         # Per /reverse leggi TUTTO ricorsivamente
-                        self.root.after(0, lambda: self._add_message("🔍 Modalità REVERSE: lettura completa del progetto...", "info"))
+                        self.root.after(0, lambda: self._add_message(" Modalit REVERSE: lettura completa del progetto...", "info"))
                         
                         # Prima leggi documentazione (*.md, *.txt, *.rst)
                         for ext in ['*.md', '*.txt', '*.rst', 'README*', 'LICENSE*']:
@@ -1616,14 +1627,14 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                         try:
                             content = f.read_text(encoding='utf-8', errors='replace')
                             rel_path = f.relative_to(project_path) if is_reverse else f.name
-                            # Per reverse: più contenuto per file (3000 chars)
+                            # Per reverse: pi contenuto per file (3000 chars)
                             max_chars = 3000 if is_reverse else 1500
                             file_context += f"## {rel_path}:\n```\n{content[:max_chars]}\n```\n\n"
                         except Exception as exc:
                             pass
 
                     if file_context:
-                        self.root.after(0, lambda: self._add_message(f"✓ Trovati {len(code_files)} file", "success"))
+                        self.root.after(0, lambda: self._add_message(f" Trovati {len(code_files)} file", "success"))
                         # Aggiungi contesto come primo messaggio
                         self.session.add_message("user", f"## Contesto file esistenti:\n\n{file_context}\n\n## PATH progetto: {project_path}")
 
@@ -1633,47 +1644,47 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                 # Debug: controlla che ci siano messaggi
                 messages = self.session.to_ollama_messages()
                 if not messages:
-                    self.root.after(0, lambda: self._add_message("⚠️ Nessun messaggio nella sessione", "warning"))
+                    self.root.after(0, lambda: self._add_message(" Nessun messaggio nella sessione", "warning"))
                     return
 
                 # Chiama Ollama
                 response = ""
                 for chunk in self.ollama.chat(messages, stream=True):
                     if self.stop_flag:
-                        self.root.after(0, lambda: self._add_message("⏹️ [Interrotto dall'utente]", "warning"))
+                        self.root.after(0, lambda: self._add_message(" [Interrotto dall'utente]", "warning"))
                         break
                     response += chunk
 
-                # Controlla se la risposta è vuota
+                # Controlla se la risposta  vuota
                 if not response or not response.strip():
-                    self.root.after(0, lambda: self._add_message("⚠️ Nessuna risposta dall'LLM", "warning"))
-                    self.root.after(0, lambda: self._add_message("💡 Prova a riformulare la richiesta o cambia modello", "info"))
+                    self.root.after(0, lambda: self._add_message(" Nessuna risposta dall'LLM", "warning"))
+                    self.root.after(0, lambda: self._add_message(" Prova a riformulare la richiesta o cambia modello", "info"))
                 else:
-                    # ✅ LOG COMPLETO DELLA RESPONSE
-                    self.root.after(0, lambda: self._add_message(f"📝 RAW Response ({len(response)} chars):", "info"))
+                    #  LOG COMPLETO DELLA RESPONSE
+                    self.root.after(0, lambda: self._add_message(f" RAW Response ({len(response)} chars):", "info"))
                     self.root.after(0, lambda: self._add_message(response[:2000] + ("..." if len(response) > 2000 else ""), "code"))
 
-                    # ✅ PARSING ED ESECUZIONE COMANDI
+                    #  PARSING ED ESECUZIONE COMANDI
                     parsed = self.parser.parse(response)
 
                     if not parsed.is_valid:
-                        self.root.after(0, lambda: self._add_message(f"❌ Parsing fallito: {parsed.error}", "error"))
-                        self.root.after(0, lambda: self._add_message(f"💡 Raw JSON: {parsed.raw_response[:500]}", "warning"))
+                        self.root.after(0, lambda: self._add_message(f" Parsing fallito: {parsed.error}", "error"))
+                        self.root.after(0, lambda: self._add_message(f" Raw JSON: {parsed.raw_response[:500]}", "warning"))
                         self.session.add_message("assistant", response)
                     elif parsed.commands:
-                        self.root.after(0, lambda: self._add_message(f"✓ {len(parsed.commands)} comandi parsati", "success"))
+                        self.root.after(0, lambda: self._add_message(f" {len(parsed.commands)} comandi parsati", "success"))
 
                         # Esegui comandi - sincrono per evitare bug con lambda
                         for i, cmd in enumerate(parsed.commands, 1):
                             self.root.after(0, lambda c=cmd, idx=i: self._add_message(f"[{idx}] {c[:100]}...", "info"))
                             ok, out = self.file_ops.execute_command(cmd)
                             if ok:
-                                output_msg = f"✓ Comando {i} eseguito"
+                                output_msg = f" Comando {i} eseguito"
                                 if out and len(out) < 500:
                                     output_msg += f"\n  Output: {out}"
                                 self.root.after(0, lambda m=output_msg: self._add_message(m, "success"))
                             else:
-                                self.root.after(0, lambda e=out, idx=i: self._add_message(f"✗ Comando {idx} fallito: {e}", "error"))
+                                self.root.after(0, lambda e=out, idx=i: self._add_message(f" Comando {idx} fallito: {e}", "error"))
 
                         self.session.add_message("assistant", response)
                     else:
@@ -1685,19 +1696,19 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                 error_msg = str(exc) if exc else "Errore sconosciuto"
                 error_type = type(exc).__name__
 
-                self.root.after(0, lambda: self._add_message(f"❌ Errore ({error_type}): {error_msg}", "error"))
+                self.root.after(0, lambda: self._add_message(f" Errore ({error_type}): {error_msg}", "error"))
 
                 # Suggerimenti basati sul tipo di errore
                 if "Connection" in error_type or "connection" in error_msg.lower():
-                    self.root.after(0, lambda: self._add_message("💡 Verifica che 'ollama serve' sia in esecuzione", "info"))
+                    self.root.after(0, lambda: self._add_message(" Verifica che 'ollama serve' sia in esecuzione", "info"))
                 elif "Timeout" in error_type or "timeout" in error_msg.lower():
-                    self.root.after(0, lambda: self._add_message("💡 Il modello sta impiegando troppo tempo, prova con un modello più veloce", "info"))
+                    self.root.after(0, lambda: self._add_message(" Il modello sta impiegando troppo tempo, prova con un modello pi veloce", "info"))
                 elif "500" in error_msg:
-                    self.root.after(0, lambda: self._add_message("💡 Errore interno di Ollama, prova a riavviare il servizio", "info"))
+                    self.root.after(0, lambda: self._add_message(" Errore interno di Ollama, prova a riavviare il servizio", "info"))
                 elif "404" in error_msg:
-                    self.root.after(0, lambda: self._add_message("💡 Modello non trovato, usa /model per cambiare", "info"))
+                    self.root.after(0, lambda: self._add_message(" Modello non trovato, usa /model per cambiare", "info"))
                 else:
-                    self.root.after(0, lambda: self._add_message("💡 Riprova o controlla i log per dettagli", "info"))
+                    self.root.after(0, lambda: self._add_message(" Riprova o controlla i log per dettagli", "info"))
 
                 # Log su file per debug
                 try:
@@ -1710,13 +1721,13 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
                         f.write(f"Session: {self.session.id if self.session else 'None'}\n")
                         f.write(f"Messages count: {len(self.session.messages) if self.session else 0}\n\n")
                 except Exception as log_err:
-                    self.root.after(0, lambda: self._add_message(f"⚠️ Errore log: {log_err}", "warning"))
+                    self.root.after(0, lambda: self._add_message(f" Errore log: {log_err}", "warning"))
 
             finally:
                 self.is_thinking = False
                 self.stop_flag = False
                 self.root.after(0, lambda: self.thinking_anim.stop())
-                self.root.after(0, lambda: self._set_status("● Connesso", "success"))
+                self.root.after(0, lambda: self._set_status(" Connesso", "success"))
                 self.root.after(0, lambda: self.send_btn.config(state=tk.NORMAL))
                 self.root.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
 
@@ -1775,7 +1786,93 @@ Rispondi SOLO con comandi JSON per creare DOCUMENTAZIONE.md:"""
             return "Gioco del Tris"
         return "Nuovo Progetto"
 
-    def _build_planning_prompt(self, user_message: str) -> str:
+    def _list_project_code_files(self, project_path: Path, max_files: int = 80) -> list[str]:
+        allowed_ext = {
+            ".html", ".css", ".js", ".ts", ".py", ".java", ".cs", ".go", ".rs",
+            ".cpp", ".c", ".h", ".hpp", ".json", ".yaml", ".yml", ".md", ".txt",
+            ".xml", ".sql", ".sh", ".ps1",
+        }
+        excluded_names = {
+            ".project_memory.json",
+            "PLAN_SCHEMA.json",
+            "STEP_CONTEXT.json",
+            "claude.md",
+            "claude_plan.md",
+        }
+        names: list[str] = []
+        try:
+            for item in project_path.iterdir():
+                if not item.is_file():
+                    continue
+                if item.name in excluded_names:
+                    continue
+                if item.suffix.lower() in allowed_ext:
+                    names.append(item.name)
+        except Exception:
+            return []
+        return sorted(names)[:max_files]
+
+    def _run_local_project_diagnostics(self, project_path: Path, files: list[str]) -> list[tuple[str, str]]:
+        """
+        Diagnostica locale light senza LLM, riusa le validazioni cross-file.
+        Utile in /fix per capire subito cosa non torna e passarlo al planner.
+        """
+        issues: list[tuple[str, str]] = []
+        if not files:
+            return issues
+
+        step_context = {
+            "steps": [
+                {"num": idx + 1, "filename": name, "status": "pending"}
+                for idx, name in enumerate(files)
+            ]
+        }
+
+        for name in files:
+            ext = Path(name).suffix.lower()
+            if ext not in {".html", ".css", ".js", ".ts", ".py", ".java"}:
+                continue
+            try:
+                ok, reason = self._validate_written_step_file(project_path, step_context, name)
+                if not ok:
+                    issues.append((name, reason))
+            except Exception as exc:
+                issues.append((name, f"Errore diagnostica locale: {exc}"))
+        return issues[:12]
+
+    def _build_planning_prompt(
+        self,
+        user_message: str,
+        mode: str = "new",
+        existing_files: list[str] | None = None,
+        diagnostics: list[tuple[str, str]] | None = None,
+    ) -> str:
+        existing_files = existing_files or []
+        diagnostics = diagnostics or []
+        is_fix = (mode or "").lower() == "fix"
+
+        extra_context = ""
+        if is_fix:
+            files_block = "\n".join(f"- {name}" for name in existing_files[:60]) or "- Nessun file rilevato"
+            diag_block = "\n".join(f"- {name}: {reason}" for name, reason in diagnostics) or "- Nessuna anomalia locale rilevata"
+            extra_context = (
+                "\nCONTESTO FIX (PROGETTO ESISTENTE):\n"
+                f"File modificabili rilevati:\n{files_block}\n\n"
+                f"Diagnostica locale pre-fix:\n{diag_block}\n"
+            )
+
+        step_rule = "Ogni step crea un solo file." if not is_fix else "Ogni step modifica un solo file."
+        fix_rules = (
+            ""
+            if not is_fix
+            else (
+                "\nREGOLE FIX AGGIUNTIVE:\n"
+                "- Priorita': risolvi prima i problemi diagnostici elencati.\n"
+                "- Modifica SOLO file esistenti, salvo richiesta esplicita di nuovi file.\n"
+                "- In progetti HTML/CSS/JS: mantieni coerenza tra id/class HTML, selettori CSS e listener JS.\n"
+            )
+        )
+
         return f"""Sei un software architect senior.
 
 Genera SOLO un JSON valido (nessun testo extra).
@@ -1798,12 +1895,12 @@ REGOLE:
 - Nessun codice sorgente.
 - Nessun comando shell/powershell.
 - Massimo 8 step.
-- Ogni step crea un solo file.
+- {step_rule}
 - filename deve avere estensione.
 - acceptance_checks deve contenere da 2 a 4 check concreti.
-- num deve essere progressivo (1..N).
-
-Progetto richiesto: {user_message}"""
+- num deve essere progressivo (1..N).{fix_rules}
+{extra_context}
+Richiesta utente: {user_message}"""
 
     def _sanitize_llm_response(self, text: str) -> str:
         clean = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL | re.IGNORECASE)
@@ -2117,7 +2214,7 @@ Progetto richiesto: {user_message}"""
         for filename, info in contracts.items():
             elements = (info or {}).get("elements", {})
             extracted: dict = {}
-            for key in ["ids", "classes", "functions", "variables", "selectors", "used_ids", "used_classes"]:
+            for key in ["ids", "classes", "button_ids", "functions", "variables", "selectors", "used_ids", "used_classes"]:
                 values = elements.get(key) or []
                 cleaned = sorted(set(str(v).strip() for v in values if str(v).strip()))
                 if cleaned:
@@ -2134,6 +2231,7 @@ Progetto richiesto: {user_message}"""
         labels = {
             "ids": "ids",
             "classes": "classes",
+            "button_ids": "button_ids",
             "functions": "functions",
             "variables": "variables",
             "selectors": "selectors",
@@ -2216,12 +2314,17 @@ Progetto richiesto: {user_message}"""
             return """REGOLE FILE CSS:
 - Solo CSS, nessun HTML o JS.
 - Nessun placeholder.
-- Mantieni coerenza con ID/classi dichiarate nei riferimenti chiave."""
+- Mantieni coerenza con ID/classi dichiarate nei riferimenti chiave.
+- Se in HTML ci sono bottoni (es. reset), definisci selettori che li stilizzano davvero (#id, .classe o button)."""
         if ext in {"js", "ts"}:
             return """REGOLE FILE JS/TS:
 - Solo codice JS/TS, nessun markdown.
 - Funzioni complete, nessun placeholder.
-- Mantieni coerenza con i riferimenti chiave."""
+- Mantieni coerenza con i riferimenti chiave.
+- Non usare commenti HTML (`<!-- -->`) in file JS/TS.
+- Se esistono controlli UI in HTML (es. bottone reset), collega esplicitamente `addEventListener`.
+- Se usi `getElementById/querySelector`, i selettori devono esistere in HTML.
+- Per contenuti multilinea preferisci here-string PowerShell (`-Value @' ... '@`)."""
         if ext == "py":
             return """REGOLE FILE PY:
 - Solo codice Python valido.
@@ -2243,6 +2346,7 @@ VINCOLI DI OUTPUT:
 - Nessun testo extra fuori dal JSON.
 - Usa comandi compatibili con PowerShell.
 - Obbligatorio usare chiavi cmd1/cmd2/cmd3...
+- Se il file e' multilinea, preferisci `Set-Content -Path '{filename}' -Value @' ... '@`.
 - Vietato usare placeholder (es. CONTENUTO_COMPLETO).
 
 Siamo allo step {step['num']}/{total_steps}."""
@@ -2254,8 +2358,25 @@ Siamo allo step {step['num']}/{total_steps}."""
             f"- Errore precedente: {reason}\n"
             f"- File target obbligatorio: `{filename}`\n"
             "- Output solo oggetto JSON con cmd1/cmd2...\n"
+            "- Comando completo: non troncare `-Value`, chiudi sempre stringhe o here-string.\n"
             "- Nessun testo extra, nessun markdown, nessun placeholder.\n"
         )
+
+    def _step_num_predict_for_filename(self, wf: dict, filename: str) -> int:
+        """Aumenta num_predict per file tendenzialmente piu' lunghi."""
+        try:
+            base = int((wf or {}).get("step_num_predict", 1200))
+        except Exception:
+            base = 1200
+
+        ext = Path(filename or "").suffix.lower()
+        if ext in {".js", ".ts"}:
+            return max(base, 3200)
+        if ext in {".py", ".java", ".cs"}:
+            return max(base, 2600)
+        if ext in {".html", ".css"}:
+            return max(base, 2600)
+        return max(base, 1200)
 
     def _extract_command_target_filename(self, cmd: str) -> str | None:
         cmd_str = (cmd or "").strip()
@@ -2286,6 +2407,305 @@ Siamo allo step {step['num']}/{total_steps}."""
                 return False
         return found_write_command
 
+    def _is_write_command_string(self, text: str) -> bool:
+        cmd = (text or "").strip()
+        if not cmd:
+            return False
+        if cmd.startswith("Set-Content") or cmd.startswith("Add-Content"):
+            return True
+        return bool(re.search(r"cat\s+<<\s*'?EOF'?\s*>", cmd))
+
+    def _extract_direct_file_content_from_response(self, response: str, filename: str) -> str | None:
+        """
+        Fallback: estrae contenuto file quando il modello restituisce JSON con cmd1 non-comando
+        o direttamente un blocco codice.
+        """
+        clean = (response or "").strip()
+        if not clean:
+            return None
+
+        # 1) JSON object con cmdN che contiene contenuto diretto (non comando)
+        obj = self._extract_first_json_object(clean)
+        if isinstance(obj, dict):
+            cmd_keys = sorted(
+                [k for k in obj.keys() if re.fullmatch(r"cmd\d+", str(k), re.IGNORECASE)],
+                key=lambda k: int(re.search(r"\d+", str(k)).group(0)) if re.search(r"\d+", str(k)) else 10_000,
+            )
+            for key in cmd_keys:
+                val = obj.get(key)
+                if not isinstance(val, str):
+                    continue
+                candidate = val.strip()
+                if not candidate or self._is_write_command_string(candidate):
+                    continue
+                if len(candidate) >= 20:
+                    return candidate
+
+        # 2) Code block markdown
+        blocks = re.findall(r"```(?:[a-zA-Z0-9_+.-]+)?\s*\n(.*?)```", clean, re.DOTALL)
+        if blocks:
+            candidate = max((b.strip() for b in blocks if b and b.strip()), key=len, default="")
+            if candidate:
+                return candidate
+
+        # 3) Euristica minimale per file testuali
+        ext = Path(filename).suffix.lower()
+        if ext == ".html":
+            m = re.search(r"(<!DOCTYPE\s+html.*?</html>)", clean, re.IGNORECASE | re.DOTALL)
+            if m:
+                return m.group(1).strip()
+        if ext in {".js", ".ts", ".css", ".py"} and len(clean) >= 20:
+            if not self._is_write_command_string(clean):
+                return clean
+
+        return None
+
+    def _write_direct_step_content(self, p_path: Path, filename: str, content: str) -> bool:
+        validation = self._validate_file_content(filename, content)
+        if not validation['valid']:
+            logger.warning(f"Contenuto diretto scartato per {filename}: {validation['reason']}")
+            return False
+
+        t_file = p_path / Path(filename).name
+        t_file.parent.mkdir(parents=True, exist_ok=True)
+        t_file.write_text(content, encoding='utf-8')
+        logger.info(f"File creato da fallback contenuto diretto: {t_file.name} ({len(content)} bytes)")
+        return True
+
+    def _read_reference_html_content(self, p_path: Path, step_context: dict) -> str:
+        planned_steps = step_context.get("steps", []) if isinstance(step_context, dict) else []
+        html_names = [
+            Path(s.get("filename", "")).name
+            for s in planned_steps
+            if str(s.get("filename", "")).lower().endswith(".html")
+        ]
+        for name in html_names:
+            f = p_path / name
+            if f.exists():
+                return f.read_text(encoding="utf-8", errors="replace")
+        for f in sorted(p_path.glob("*.html")):
+            if f.is_file():
+                return f.read_text(encoding="utf-8", errors="replace")
+        return ""
+
+    def _extract_html_contract(self, html_content: str) -> dict:
+        ids = set(re.findall(r'id=["\']([^"\']+)["\']', html_content, re.IGNORECASE))
+        class_attrs = re.findall(r'class=["\']([^"\']+)["\']', html_content, re.IGNORECASE)
+        classes: set[str] = set()
+        for attr in class_attrs:
+            for token in re.split(r"\s+", attr.strip()):
+                if token:
+                    classes.add(token)
+
+        button_ids = set(
+            re.findall(r'<button[^>]*\bid=["\']([^"\']+)["\']', html_content, re.IGNORECASE)
+        )
+        button_classes: set[str] = set()
+        for match in re.finditer(r'<button[^>]*\bclass=["\']([^"\']+)["\']', html_content, re.IGNORECASE):
+            for token in re.split(r"\s+", match.group(1).strip()):
+                if token:
+                    button_classes.add(token)
+
+        return {
+            "ids": ids,
+            "classes": classes,
+            "button_ids": button_ids,
+            "button_classes": button_classes,
+        }
+
+    def _html_button_has_inline_handler(self, html_content: str, button_id: str) -> bool:
+        return bool(
+            re.search(
+                rf"<button[^>]*\bid=[\"']{re.escape(button_id)}[\"'][^>]*\bon\w+\s*=",
+                html_content,
+                re.IGNORECASE,
+            )
+        )
+
+    def _validate_css_against_html(self, css_content: str, html_content: str) -> tuple[bool, str]:
+        html = self._extract_html_contract(html_content)
+        html_ids = html["ids"]
+        html_classes = html["classes"]
+        button_ids = html["button_ids"]
+        button_classes = html["button_classes"]
+
+        if not html_ids and not html_classes:
+            return True, "OK"
+
+        dom_selector_hits = 0
+        for el_id in html_ids:
+            if f"#{el_id}" in css_content:
+                dom_selector_hits += 1
+        for cls in html_classes:
+            if f".{cls}" in css_content:
+                dom_selector_hits += 1
+
+        if dom_selector_hits == 0:
+            return False, "CSS non usa selector coerenti con id/class presenti in HTML"
+
+        # I bottoni HTML devono avere stile specifico o almeno regole generiche su `button`.
+        has_generic_button_style = bool(re.search(r"(?<![A-Za-z0-9_-])button(?![A-Za-z0-9_-])", css_content))
+        button_specific_hits = 0
+        for el_id in button_ids:
+            if f"#{el_id}" in css_content:
+                button_specific_hits += 1
+        for cls in button_classes:
+            if f".{cls}" in css_content:
+                button_specific_hits += 1
+
+        if (button_ids or button_classes) and button_specific_hits == 0 and not has_generic_button_style:
+            return False, "CSS non contiene stili applicabili ai bottoni presenti in HTML"
+
+        return True, "OK"
+
+    def _extract_js_id_bindings(self, js_content: str) -> tuple[set[str], dict[str, set[str]]]:
+        used_ids: set[str] = set()
+        id_to_vars: dict[str, set[str]] = {}
+
+        direct_ids = re.findall(r"getElementById\(\s*['\"]([^'\"]+)['\"]\s*\)", js_content)
+        direct_ids += re.findall(r"querySelector\(\s*['\"]#([^'\"]+)['\"]\s*\)", js_content)
+        used_ids.update(direct_ids)
+
+        for var_name, element_id in re.findall(
+            r"(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*document\.getElementById\(\s*['\"]([^'\"]+)['\"]\s*\)",
+            js_content,
+        ):
+            used_ids.add(element_id)
+            id_to_vars.setdefault(element_id, set()).add(var_name)
+
+        for var_name, element_id in re.findall(
+            r"(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*document\.querySelector\(\s*['\"]#([^'\"]+)['\"]\s*\)",
+            js_content,
+        ):
+            used_ids.add(element_id)
+            id_to_vars.setdefault(element_id, set()).add(var_name)
+
+        return used_ids, id_to_vars
+
+    def _js_has_listener_for_id(self, js_content: str, element_id: str, id_to_vars: dict[str, set[str]]) -> bool:
+        if re.search(
+            rf"document\.getElementById\(\s*['\"]{re.escape(element_id)}['\"]\s*\)\s*\.addEventListener\(",
+            js_content,
+        ):
+            return True
+        if re.search(
+            rf"document\.querySelector\(\s*['\"]#{re.escape(element_id)}['\"]\s*\)\s*\.addEventListener\(",
+            js_content,
+        ):
+            return True
+
+        for var_name in id_to_vars.get(element_id, set()):
+            if re.search(rf"\b{re.escape(var_name)}\b\s*(?:\?\.)?\.addEventListener\(", js_content):
+                return True
+        return False
+
+    def _validate_js_against_html(self, js_content: str, html_content: str) -> tuple[bool, str]:
+        html = self._extract_html_contract(html_content)
+        html_ids = html["ids"]
+        html_classes = html["classes"]
+        button_ids = html["button_ids"]
+
+        used_ids, id_to_vars = self._extract_js_id_bindings(js_content)
+        missing_ids = sorted(el_id for el_id in used_ids if el_id not in html_ids)
+        if missing_ids:
+            return False, f"JS usa id non presenti in HTML: {', '.join(missing_ids[:5])}"
+
+        selectors = re.findall(r"(?:querySelectorAll|querySelector)\(\s*['\"]([^'\"]+)['\"]\s*\)", js_content)
+        for sel in selectors:
+            if re.fullmatch(r"\.[A-Za-z0-9_-]+", sel):
+                class_name = sel[1:]
+                if class_name not in html_classes:
+                    return False, f"JS usa classe non presente in HTML: .{class_name}"
+            if re.fullmatch(r"#[A-Za-z0-9_-]+", sel):
+                element_id = sel[1:]
+                if element_id not in html_ids:
+                    return False, f"JS usa id non presente in HTML: #{element_id}"
+
+        # Se esistono bottoni con id, devono avere almeno un listener JS o un handler inline.
+        if button_ids:
+            listener_count = 0
+            for btn_id in button_ids:
+                if self._js_has_listener_for_id(js_content, btn_id, id_to_vars):
+                    listener_count += 1
+
+            if listener_count == 0:
+                missing = ", ".join(sorted(button_ids)[:4])
+                return False, f"JS non collega event listener ai bottoni HTML (id: {missing})"
+
+            critical_keywords = ("reset", "restart", "submit", "save", "send", "start", "stop")
+            for btn_id in button_ids:
+                if not any(k in btn_id.lower() for k in critical_keywords):
+                    continue
+                has_listener = self._js_has_listener_for_id(js_content, btn_id, id_to_vars)
+                has_inline = self._html_button_has_inline_handler(html_content, btn_id)
+                if not has_listener and not has_inline:
+                    return False, f"JS non gestisce il bottone critico `{btn_id}` (listener mancante)"
+
+        return True, "OK"
+
+    def _validate_python_source(self, filename: str, content: str) -> tuple[bool, str]:
+        try:
+            compile(content, filename, "exec")
+            return True, "OK"
+        except SyntaxError as exc:
+            return False, f"Python syntax error: {exc.msg} (line {exc.lineno})"
+        except Exception as exc:
+            return False, f"Python validation error: {exc}"
+
+    def _validate_java_source_light(self, content: str) -> tuple[bool, str]:
+        if not re.search(r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*", content):
+            return False, "Java: manca dichiarazione di classe"
+        if content.count("{") != content.count("}"):
+            return False, "Java: parentesi graffe sbilanciate"
+        return True, "OK"
+
+    def _validate_written_step_file(self, p_path: Path, step_context: dict, filename: str) -> tuple[bool, str]:
+        """
+        Validazione cross-file post-scrittura per evitare output formalmente valido ma non collegato.
+        """
+        target = p_path / Path(filename).name
+        if not target.exists():
+            return False, f"File non trovato dopo la scrittura: {filename}"
+
+        content = target.read_text(encoding="utf-8", errors="replace")
+        ext = Path(filename).suffix.lower()
+        planned_steps = step_context.get("steps", []) if isinstance(step_context, dict) else []
+        expected_css = [
+            Path(s.get("filename", "")).name
+            for s in planned_steps
+            if str(s.get("filename", "")).lower().endswith(".css")
+        ]
+        expected_js = [
+            Path(s.get("filename", "")).name
+            for s in planned_steps
+            if str(s.get("filename", "")).lower().endswith((".js", ".ts"))
+        ]
+
+        if ext == ".html":
+            for css_name in expected_css:
+                if not re.search(rf"<link[^>]*href=[\"']{re.escape(css_name)}[\"']", content, re.IGNORECASE):
+                    return False, f"HTML non collega il file CSS previsto: {css_name}"
+            for js_name in expected_js:
+                if not re.search(rf"<script[^>]*src=[\"']{re.escape(js_name)}[\"']", content, re.IGNORECASE):
+                    return False, f"HTML non collega il file JS previsto: {js_name}"
+            return True, "OK"
+
+        html_content = self._read_reference_html_content(p_path, step_context)
+
+        if ext == ".css" and html_content:
+            return self._validate_css_against_html(content, html_content)
+
+        if ext in {".js", ".ts"} and html_content:
+            return self._validate_js_against_html(content, html_content)
+
+        if ext == ".py":
+            return self._validate_python_source(filename, content)
+
+        if ext == ".java":
+            return self._validate_java_source_light(content)
+
+        return True, "OK"
+
     def _execute_direct_workflow(self, user_message, project_path):
         """Workflow deterministico a step: plan -> parse steps -> execute step -> update STEP_CONTEXT."""
         try:
@@ -2300,16 +2720,35 @@ Siamo allo step {step['num']}/{total_steps}."""
             p_path = project_path or Path(".")
             p_path.mkdir(parents=True, exist_ok=True)
 
+            mode = getattr(self, "mode", "new")
+            existing_files = self._list_project_code_files(p_path) if mode == "fix" else []
+            diagnostics = self._run_local_project_diagnostics(p_path, existing_files) if mode == "fix" else []
+
+            if mode == "fix":
+                self.root.after(0, lambda: self._add_message(f"[FIX] Path target: {p_path}", "info"))
+                self.root.after(0, lambda: self._add_message(f"[FIX] File rilevati: {len(existing_files)}", "info"))
+                if diagnostics:
+                    for name, reason in diagnostics[:8]:
+                        self.root.after(0, lambda n=name, r=reason: self._add_message(f"[DIAG] {n}: {r}", "warning"))
+                else:
+                    self.root.after(0, lambda: self._add_message("[DIAG] Nessuna anomalia locale evidente", "success"))
+
             memory = ProjectMemory(p_path)
             memory.clear()
             project_name = self._infer_project_name(user_message)
             memory.set_project_info(project_name, user_message[:400])
 
-            plan_prompt = self._build_planning_prompt(user_message)
+            plan_prompt = self._build_planning_prompt(
+                user_message,
+                mode=mode,
+                existing_files=existing_files,
+                diagnostics=diagnostics,
+            )
             plan_system = (
                 "You are a software architect. "
                 "Reply with only one valid JSON object that follows the required schema. "
-                "No markdown, no prose, no extra keys."
+                "No markdown, no prose, no extra keys. "
+                "Do not output <think> tags."
             )
             self.root.after(0, lambda: self._add_message("[STEP] Generazione piano JSON...", "info"))
             logger.info(f"=== PIANO PROMPT ===\n{plan_prompt[:2000]}")
@@ -2427,6 +2866,7 @@ Siamo allo step {step['num']}/{total_steps}."""
 
                 success = False
                 max_retries = wf["max_step_retries"]
+                step_num_predict = self._step_num_predict_for_filename(wf, filename)
 
                 for attempt in range(max_retries + 1):
                     if self.stop_flag:
@@ -2436,21 +2876,30 @@ Siamo allo step {step['num']}/{total_steps}."""
                         "You are a senior software engineer. "
                         "Reply ONLY with a valid JSON object like: "
                         "{\\\"cmd1\\\": \\\"Set-Content -Path 'file' -Value 'content'\\\"}. "
-                        "No markdown, no explanations, no extra text."
+                        "No markdown, no explanations, no extra text. "
+                        "Do not output <think> tags."
                     )
                     exec_messages = [
                         {"role": "system", "content": exec_system},
                         {"role": "user", "content": step_msg},
                     ]
 
+                    prompt_preview = step_msg[:4000]
+                    if len(step_msg) > 4000:
+                        prompt_preview += "\n...[PROMPT TRONCATO IN LOG]..."
+                    logger.info(
+                        f"=== STEP {step_num} PROMPT attempt {attempt + 1} ===\n"
+                        f"SYSTEM:\n{exec_system}\n"
+                        f"USER:\n{prompt_preview}"
+                    )
                     logger.info(
                         f"=== STEP {step_num} attempt {attempt + 1} === messages_count={len(exec_messages)} "
-                        f"num_predict_override={wf['step_num_predict']}"
+                        f"num_predict_override={step_num_predict}"
                     )
 
                     response = ""
                     original_predict = self.ollama.options.get("num_predict")
-                    self.ollama.options["num_predict"] = wf["step_num_predict"]
+                    self.ollama.options["num_predict"] = step_num_predict
                     try:
                         for chunk in self.ollama.chat(exec_messages, stream=True):
                             if self.stop_flag:
@@ -2482,12 +2931,43 @@ Siamo allo step {step['num']}/{total_steps}."""
 
                     if parsed and parsed.is_valid and parsed.commands:
                         if not self._commands_target_expected_file(parsed.commands, filename):
-                            parse_error = f"Comandi non allineati al file target {filename}"
-                            logger.warning(f"STEP {step_num}: {parse_error}")
+                            only_non_command_values = all(
+                                not self._is_write_command_string(cmd) for cmd in parsed.commands
+                            )
+                            if only_non_command_values:
+                                direct_content = self._extract_direct_file_content_from_response(clean_response, filename)
+                                if direct_content and self._write_direct_step_content(p_path, filename, direct_content):
+                                    valid_step_file, step_file_reason = self._validate_written_step_file(p_path, step_context, filename)
+                                    if not valid_step_file:
+                                        parse_error = step_file_reason
+                                        logger.warning(f"STEP {step_num}: {parse_error}")
+                                        self.root.after(0, lambda r=step_file_reason: self._add_message(f"[ERR] {r}", "error"))
+                                    else:
+                                        self._update_memory_from_file(memory, filename, clean_response)
+                                        if filename not in created_files:
+                                            created_files.append(filename)
+                                        self.root.after(0, lambda fn=filename: self._add_message(f"[OK] {fn} creato (fallback content)", "success"))
+                                        success = True
+                                else:
+                                    parse_error = f"Contenuto diretto non valido per {filename}"
+                                    logger.warning(f"STEP {step_num}: {parse_error}")
+                            else:
+                                parse_error = f"Comandi non allineati al file target {filename}"
+                                logger.warning(f"STEP {step_num}: {parse_error}")
                         else:
                             for cmd in parsed.commands:
+                                if self._is_command_likely_truncated(cmd):
+                                    parse_error = "Comando troncato o stringa -Value non chiusa"
+                                    logger.warning(f"STEP {step_num}: {parse_error}")
+                                    break
                                 ok = self._execute_command_with_fallback(cmd, p_path, filename)
                                 if ok:
+                                    valid_step_file, step_file_reason = self._validate_written_step_file(p_path, step_context, filename)
+                                    if not valid_step_file:
+                                        parse_error = step_file_reason
+                                        logger.warning(f"STEP {step_num}: {parse_error}")
+                                        self.root.after(0, lambda r=step_file_reason: self._add_message(f"[ERR] {r}", "error"))
+                                        continue
                                     self._update_memory_from_file(memory, filename, clean_response)
                                     if filename not in created_files:
                                         created_files.append(filename)
@@ -2542,7 +3022,7 @@ Siamo allo step {step['num']}/{total_steps}."""
             self.root.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
 
     def _execute_agentic_workflow(self, user_message, project_path):
-        """Instrada sempre al workflow deterministico step-by-step."""
+        """Instrada /new e /fix al workflow deterministico step-by-step."""
         return self._execute_direct_workflow(user_message, project_path)
 
     def _execute_command_with_fallback(self, cmd: str, p_path: Path, filename: str) -> bool:
@@ -2550,6 +3030,10 @@ Siamo allo step {step['num']}/{total_steps}."""
         try:
             import re
             cmd_str = cmd.strip()
+
+            if self._is_command_likely_truncated(cmd_str):
+                logger.error("Comando rifiutato: output troncato o stringa -Value non chiusa")
+                return False
             
             if cmd_str.startswith("Set-Content") or cmd_str.startswith("Add-Content"):
                 # Estrai Path
@@ -2557,7 +3041,7 @@ Siamo allo step {step['num']}/{total_steps}."""
                 if not p_match:
                     p_match = re.search(r"-Path\s+\"([^\"]*)\"", cmd_str)
                 if not p_match:
-                    logger.error(f"❌ Nessun -Path trovato nel comando")
+                    logger.error(f" Nessun -Path trovato nel comando")
                     return False
                 target_name = Path(p_match.group(1)).name
                 expected_name = Path(filename).name
@@ -2570,13 +3054,13 @@ Siamo allo step {step['num']}/{total_steps}."""
                 # Estrai Value con parsing ROBUSTO
                 content = self._extract_value_from_command(cmd_str)
                 if content is None:
-                    logger.error(f"❌ Impossibile estrarre -Value dal comando")
+                    logger.error(f" Impossibile estrarre -Value dal comando")
                     return False
                 
                 # === VALIDAZIONE CRITICA ===
                 validation = self._validate_file_content(filename, content)
                 if not validation['valid']:
-                    logger.error(f"❌ VALIDAZIONE FALLITA per {filename}: {validation['reason']}")
+                    logger.error(f" VALIDAZIONE FALLITA per {filename}: {validation['reason']}")
                     return False
                 # =========================
                 
@@ -2585,7 +3069,7 @@ Siamo allo step {step['num']}/{total_steps}."""
                 mode = 'a' if cmd_str.startswith("Add-Content") else 'w'
                 with open(t_file, mode, encoding='utf-8') as f:
                     f.write(content)
-                logger.info(f"✅ File creato: {t_file.name} ({len(content)} bytes)")
+                logger.info(f" File creato: {t_file.name} ({len(content)} bytes)")
                 return True
             
             # Supporto heredoc: cat << 'EOF' > file o cat << 'EOF' > file
@@ -2603,7 +3087,7 @@ Siamo allo step {step['num']}/{total_steps}."""
                     )
                     return False
                 # Estrai contenuto tra la prima riga e EOF finale
-                # Il contenuto è tutto dopo il primo newline fino a EOF
+                # Il contenuto  tutto dopo il primo newline fino a EOF
                 first_nl = cmd_str.find('\n', heredoc_match.end())
                 if first_nl == -1:
                     # Prova con \\n letterale
@@ -2625,14 +3109,14 @@ Siamo allo step {step['num']}/{total_steps}."""
                 if content.strip():
                     validation = self._validate_file_content(filename, content)
                     if not validation['valid']:
-                        logger.error(f"❌ VALIDAZIONE FALLITA per {filename}: {validation['reason']}")
+                        logger.error(f" VALIDAZIONE FALLITA per {filename}: {validation['reason']}")
                         return False
 
                     t_file = p_path / expected_name
                     t_file.parent.mkdir(parents=True, exist_ok=True)
                     with open(t_file, 'w', encoding='utf-8') as f:
                         f.write(content)
-                    logger.info(f"✅ File creato (heredoc): {t_file.name} ({len(content)} bytes)")
+                    logger.info(f" File creato (heredoc): {t_file.name} ({len(content)} bytes)")
                     return True
 
             # Fallback a shell
@@ -2642,74 +3126,128 @@ Siamo allo step {step['num']}/{total_steps}."""
             logger.error(f"Errore esecuzione: {e}")
             return False
     
-    def _extract_value_from_command(self, cmd_str: str) -> str:
+    def _extract_value_from_command(self, cmd_str: str) -> str | None:
         """
         Estrae il contenuto da -Value con parsing robusto.
-        Gestisce virgolette escapate '' e \n.
+        Gestisce stringhe quote-based e here-string PowerShell.
         """
-        v_start = cmd_str.find("-Value ")
-        if v_start == -1:
-            v_start = cmd_str.find("-Value\t")
-        
-        if v_start == -1:
+        v_match = re.search(r"-Value\b", cmd_str)
+        if not v_match:
             return None
-        
-        # Trova l'inizio del valore
-        value_start_pos = v_start + 7
-        while value_start_pos < len(cmd_str) and cmd_str[value_start_pos] in ' \t':
+
+        value_start_pos = v_match.end()
+        while value_start_pos < len(cmd_str) and cmd_str[value_start_pos] in " \t":
             value_start_pos += 1
-        
+
         if value_start_pos >= len(cmd_str):
             return None
-        
+
+        # Supporto here-string PowerShell: -Value @' ... '@ oppure -Value @" ... "@
+        if cmd_str.startswith("@'", value_start_pos) or cmd_str.startswith('@"', value_start_pos):
+            opener = cmd_str[value_start_pos:value_start_pos + 2]
+            closer = "'@" if opener == "@'" else '"@'
+            content_start = value_start_pos + 2
+            if cmd_str.startswith("\r\n", content_start):
+                content_start += 2
+            elif content_start < len(cmd_str) and cmd_str[content_start] == "\n":
+                content_start += 1
+
+            end_pos = cmd_str.find(closer, content_start)
+            if end_pos == -1:
+                return None
+            return self._decode_command_value(cmd_str[content_start:end_pos], None)
+
         quote_char = cmd_str[value_start_pos]
         if quote_char not in ("'", '"'):
             return None
-        
-        # Parsing carattere per carattere per gestire escaping
-        content_chars = []
-        pos = value_start_pos + 1  # salta virgoletta iniziale
-        
+
+        content_chars: list[str] = []
+        pos = value_start_pos + 1
+
         while pos < len(cmd_str):
             char = cmd_str[pos]
-            
-            # Fine stringa: virgoletta non escapata
+
             if char == quote_char:
-                # Controlla se è escapata (SEGUITA da altra virgoletta uguale → '')
                 if quote_char == "'" and pos + 1 < len(cmd_str) and cmd_str[pos + 1] == "'":
-                    # '' → aggiungi una singola ' e salta entrambe
                     content_chars.append("'")
                     pos += 2
                     continue
-                else:
-                    # Virgoletta di chiusura trovata
-                    break
-            
-            # Gestione backslash escapes
-            if char == '\\' and pos + 1 < len(cmd_str):
+                if quote_char == '"' and content_chars and content_chars[-1] == "`":
+                    content_chars[-1] = '"'
+                    pos += 1
+                    continue
+
+                content = self._decode_command_value("".join(content_chars), quote_char)
+                remainder = cmd_str[pos + 1:].strip()
+                if quote_char == "'" and remainder and not remainder.startswith("-"):
+                    tail = cmd_str[value_start_pos + 1:]
+                    last_quote_rel = tail.rfind("'")
+                    if last_quote_rel > 0:
+                        return self._decode_command_value(tail[:last_quote_rel], quote_char)
+                return content
+
+            if char == "\\" and pos + 1 < len(cmd_str):
                 next_char = cmd_str[pos + 1]
-                if next_char == 'n':
-                    content_chars.append('\n')
+                if next_char == "n":
+                    content_chars.append("\n")
                     pos += 2
                     continue
-                elif next_char == 't':
-                    content_chars.append('\t')
+                if next_char == "t":
+                    content_chars.append("\t")
                     pos += 2
                     continue
-                elif next_char == '\\':
-                    content_chars.append('\\')
+                if next_char == "\\":
+                    content_chars.append("\\")
                     pos += 2
                     continue
-                elif next_char == quote_char:
+                if next_char == quote_char:
                     content_chars.append(quote_char)
                     pos += 2
                     continue
-            
+
             content_chars.append(char)
             pos += 1
-        
-        content = ''.join(content_chars)
-        return content
+
+        tail = cmd_str[value_start_pos + 1:]
+        last_quote_rel = tail.rfind(quote_char)
+        if last_quote_rel > 0:
+            return self._decode_command_value(tail[:last_quote_rel], quote_char)
+        return None
+
+    def _decode_command_value(self, raw_value: str, quote_char: str | None) -> str:
+        """Decodifica escape comuni mantenendo robustezza verso output LLM non perfetti."""
+        value = raw_value
+        if quote_char == "'":
+            value = value.replace("''", "'")
+        value = value.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+        value = value.replace('\\"', '"').replace("\\'", "'")
+        return value
+
+    def _is_command_likely_truncated(self, cmd: str) -> bool:
+        """Rileva comandi probabilmente troncati prima della chiusura del contenuto."""
+        cmd_str = (cmd or "").strip()
+        if not cmd_str:
+            return True
+        if cmd_str.endswith("\\") or cmd_str.endswith("`"):
+            return True
+
+        here_single = cmd_str.find("-Value @'")
+        if here_single >= 0 and cmd_str.find("'@", here_single + 8) == -1:
+            return True
+
+        here_double = cmd_str.find('-Value @"')
+        if here_double >= 0 and cmd_str.find('"@', here_double + 8) == -1:
+            return True
+
+        if re.search(r"-Value\s+'", cmd_str):
+            if not re.search(r"-Value\s+'(?:.|\n)*'(?:\s+-[A-Za-z][\w-]*(?:\s+[^-].*)?)?\s*$", cmd_str):
+                return True
+
+        if re.search(r'-Value\s+"', cmd_str):
+            if not re.search(r'-Value\s+"(?:.|\n)*"(?:\s+-[A-Za-z][\w-]*(?:\s+[^-].*)?)?\s*$', cmd_str):
+                return True
+
+        return False
     
     def _validate_file_content(self, filename: str, content: str) -> dict:
         """Valida che il contenuto del file sia plausibile e non un placeholder."""
@@ -2739,6 +3277,8 @@ Siamo allo step {step['num']}/{total_steps}."""
         elif ext in {'js', 'ts'}:
             if stripped.startswith('.'):
                 return {'valid': False, 'reason': f'{ext.upper()}: inizia con "." (errore parsing)'}
+            if stripped.lstrip().startswith('<!--'):
+                return {'valid': False, 'reason': f'{ext.upper()}: contiene commento HTML in testa'}
             if 'function' not in stripped.lower() and '=>' not in stripped:
                 return {'valid': False, 'reason': f'{ext.upper()}: manca almeno una funzione'}
 
@@ -2781,14 +3321,19 @@ Siamo allo step {step['num']}/{total_steps}."""
 
         if ext == '.html':
             ids = re.findall(r"id=[\"']([^\"']+)[\"']", content)
-            classes = re.findall(r"class=[\"']([^\"']+)[\"']", content)
-            has_css_link = bool(re.search(r"<link[^>]*href=[\"'][^\"']+\\.css[\"']", content, re.IGNORECASE))
-            has_js_link = bool(re.search(r"<script[^>]*src=[\"'][^\"']+\\.js[\"']", content, re.IGNORECASE))
+            class_attrs = re.findall(r"class=[\"']([^\"']+)[\"']", content)
+            classes = []
+            for attr in class_attrs:
+                classes.extend([tok for tok in re.split(r"\s+", attr.strip()) if tok])
+            button_ids = re.findall(r'<button[^>]*\bid=["\']([^"\']+)["\']', content, re.IGNORECASE)
+            has_css_link = bool(re.search(r"<link[^>]*href=[\"'][^\"']+\.css[\"']", content, re.IGNORECASE))
+            has_js_link = bool(re.search(r"<script[^>]*src=[\"'][^\"']+\.(?:js|ts)[\"']", content, re.IGNORECASE))
             has_inline_style = bool(re.search(r'<style[^>]*>.*?</style>', content, re.DOTALL | re.IGNORECASE))
             has_inline_script = bool(re.search(r'<script(?![^>]*src=)[^>]*>.*?</script>', content, re.DOTALL | re.IGNORECASE))
             elements = {
                 'ids': ids,
                 'classes': classes,
+                'button_ids': button_ids,
                 'has_css_link': [str(has_css_link)],
                 'has_js_link': [str(has_js_link)],
                 'has_inline_style': [str(has_inline_style)],
@@ -2807,8 +3352,9 @@ Siamo allo step {step['num']}/{total_steps}."""
             functions = re.findall(r'function\s+([a-zA-Z0-9_]+)', content)
             functions += re.findall(r'([a-zA-Z0-9_]+)\s*=\s*\([^)]*\)\s*=>', content)
             variables = re.findall(r'(?:let|const|var)\s+([a-zA-Z0-9_]+)', content)
-            used_ids = re.findall(r"getElementById\\([\"']([^\"']+)[\"']\\)", content)
-            used_classes = re.findall(r"(?:querySelectorAll|querySelector)\\([\"']([^\"']+)[\"']\\)", content)
+            used_ids = re.findall(r"getElementById\(\s*[\"']([^\"']+)[\"']\s*\)", content)
+            used_ids += re.findall(r"querySelector\(\s*[\"']#([^\"']+)[\"']\s*\)", content)
+            used_classes = re.findall(r"(?:querySelectorAll|querySelector)\(\s*[\"']([^\"']+)[\"']\s*\)", content)
             elements = {
                 'functions': functions,
                 'variables': variables,
@@ -2856,37 +3402,37 @@ Siamo allo step {step['num']}/{total_steps}."""
         """Crea una nuova sessione."""
         self.session = self.session_manager.create_session()
         self.session_label.config(text=f"Sessione: {self.session.id[:8]}")
-        self._add_message("🔄 Nuova sessione iniziata.", "info")
+        self._add_message(" Nuova sessione iniziata.", "info")
 
     def _refresh_models(self):
         """Aggiorna la lista dei modelli."""
         if self.ollama and self.connected:
-            self._add_message("⟳ Aggiornamento modelli...", "info")
+            self._add_message(" Aggiornamento modelli...", "info")
             all_models = self.ollama.list_models()
             # Mostra TUTTI i modelli, non solo shellbot
             self.models = all_models
             shell_models = [m for m in all_models if "shellbot" in m.lower()]
             
             if not shell_models and all_models:
-                self._add_message(f"⚠️ Nessun modello shellBot trovato. {len(all_models)} modelli disponibili:", "warning")
+                self._add_message(f" Nessun modello shellBot trovato. {len(all_models)} modelli disponibili:", "warning")
             elif shell_models:
-                self._add_message(f"✓ {len(shell_models)} modelli shellBot su {len(all_models)} totali:", "success")
+                self._add_message(f" {len(shell_models)} modelli shellBot su {len(all_models)} totali:", "success")
             
             self.models_listbox.delete(0, tk.END)
             for i, m in enumerate(all_models, 1):
                 is_shell = "shellbot" in m.lower()
                 is_active = m == self.ollama.model
                 if is_active:
-                    prefix = "► "
+                    prefix = " "
                 elif is_shell:
-                    prefix = f"🤖 {i}. "
+                    prefix = f" {i}. "
                 else:
                     prefix = f"   {i}. "
                 self.models_listbox.insert(tk.END, f"{prefix}{m}")
                 self._add_message(f"  {prefix}{m}", "model_list")
             
             if not all_models:
-                self._add_message("⚠️ Nessun modello disponibile", "warning")
+                self._add_message(" Nessun modello disponibile", "warning")
 
     # Comandi rapidi
     def _cmd_fix(self):
@@ -2905,9 +3451,9 @@ Siamo allo step {step['num']}/{total_steps}."""
         tag = self.model_docs or (self.models[0] if self.models else None)
         if tag and self.ollama and self.ollama.model != tag:
             self.ollama.model = tag
-            self._add_message(f"🔄 Modello: {tag} (DOCS/REVERSE)", "info")
+            self._add_message(f" Modello: {tag} (DOCS/REVERSE)", "info")
         elif not tag:
-            self._add_message("⚠️ Nessun modello shellbot DOCS trovato", "warning")
+            self._add_message(" Nessun modello shellbot DOCS trovato", "warning")
         self._send_message()
 
     def _cmd_help(self):
@@ -2953,20 +3499,20 @@ Siamo allo step {step['num']}/{total_steps}."""
         if directory:
             self.file_ops = FileOperations(directory)
             self.path_label.config(text=f"Path: {directory}")
-            self._add_message(f"📁 Directory: {directory}", "info")
+            self._add_message(f" Directory: {directory}", "info")
 
     def _show_about(self):
         """Mostra informazioni."""
         messagebox.showinfo(
             "Informazioni",
-            "🦙 Ollama File System Bridge\n\n"
+            " Ollama File System Bridge\n\n"
             "Interfaccia grafica per interagire con Ollama LLM\n"
             "e gestire file system locale.\n\n"
-            "Modalità:\n"
+            "Modalit:\n"
             "  /fix   - Fix codice esistente\n"
             "  /new   - Crea nuovo progetto\n"
             "  /reverse - Genera documentazione\n\n"
-            "© 2026 - MIT License"
+            " 2026 - MIT License"
         )
 
 
